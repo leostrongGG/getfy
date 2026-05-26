@@ -84,6 +84,18 @@ class CheckoutCurrencyCatalogTest extends TestCase
     {
         Cache::forget(ExchangeRateService::CACHE_KEY_RATES_FROM_BRL);
         Http::fake([
+            'open.er-api.com/*' => Http::response([
+                'result' => 'success',
+                'base_code' => 'BRL',
+                'rates' => [
+                    'MXN' => 3.45,
+                    'USD' => 0.18,
+                    'EUR' => 0.16,
+                    'GBP' => 0.14,
+                    'COP' => 730.0,
+                    'ARS' => 275.0,
+                ],
+            ], 200),
             'api.frankfurter.app/*' => Http::response([
                 'base' => 'BRL',
                 'rates' => ['MXN' => 3.45, 'USD' => 0.18, 'EUR' => 0.16, 'GBP' => 0.14],
@@ -102,5 +114,10 @@ class CheckoutCurrencyCatalogTest extends TestCase
 
         $converted = CheckoutCurrencyCatalog::foreignFromBrlAmount(100.0, 'MXN', $rows);
         $this->assertGreaterThan(100, $converted);
+
+        $cop = collect($rows)->firstWhere('code', 'COP');
+        $this->assertNotNull($cop);
+        $this->assertGreaterThan(0, $cop['rate_to_brl']);
+        $this->assertGreaterThan(100, CheckoutCurrencyCatalog::foreignFromBrlAmount(100.0, 'COP', $rows));
     }
 }

@@ -11,7 +11,12 @@ class ExchangeRateService
 {
     private const FRANKFURTER_URL = 'https://api.frankfurter.app/latest';
 
+    /** API gratuita com taxas completas a partir de BRL (Frankfurter cobre só ~30 pares). */
+    private const ER_API_URL = 'https://open.er-api.com/v6/latest/BRL';
+
     private const CHUNK_SIZE = 30;
+
+    private const MIN_CACHE_ENTRIES = 50;
 
     public const CACHE_KEY_RATES_FROM_BRL = 'checkout.frankfurter_rates_from_brl';
 
@@ -34,9 +39,35 @@ class ExchangeRateService
             return [];
         }
 
+        $fullMap = $this->getCachedRatesMap();
+        $out = [];
+        $missing = [];
+        foreach ($codes as $code) {
+            if (isset($fullMap[$code]) && $fullMap[$code] > 0) {
+                $out[$code] = $fullMap[$code];
+            } else {
+                $missing[] = $code;
+            }
+        }
+
+        if ($missing !== []) {
+            foreach ($this->fetchRatesFromBrlFrankfurter($missing) as $code => $rate) {
+                $out[$code] = $rate;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<string>  $codes
+     * @return array<string, float>
+     */
+    private function fetchRatesFromBrlFrankfurter(array $codes): array
+    {
         $out = [];
         foreach (array_chunk($codes, self::CHUNK_SIZE) as $chunk) {
-            $part = $this->fetchChunk($chunk);
+            $part = $this->fetchFrankfurterChunk($chunk);
             foreach ($part as $code => $rate) {
                 $out[$code] = $rate;
             }
@@ -49,7 +80,7 @@ class ExchangeRateService
      * @param  list<string>  $codes
      * @return array<string, float>
      */
-    private function fetchChunk(array $codes): array
+    private function fetchFrankfurterChunk(array $codes): array
     {
         $to = implode(',', $codes);
         try {
@@ -86,7 +117,50 @@ class ExchangeRateService
     }
 
     /**
-     * Mescla taxas em linhas de moeda do tenant.
+     * Mapa completo: moeda => unidades por 1 BRL (open.er-api.com).
+     *
+     * @return array<string, float>
+     */
+    public function fetchAllRatesFromBrlErApi(): array
+    {
+        try {
+            $response = Http::timeout(25)->get(self::ER_API_URL);
+            if (! $response->successful()) {
+                Log::warning('ExchangeRateService: open.er-api HTTP error', [
+                    'status' => $response->status(),
+                ]);
+
+                return [];
+            }
+            $data = $response->json();
+            if (($data['result'] ?? '') !== 'success' || ! is_array($data['rates'] ?? null)) {
+                return [];
+            }
+            $supported = array_flip(CheckoutCurrencyCatalog::supportedCodes());
+            $out = [];
+            foreach ($data['rates'] as $code => $rate) {
+                $code = strtoupper((string) $code);
+                if ($code === 'BRL' || ! isset($supported[$code]) || ! is_numeric($rate)) {
+                    continue;
+                }
+                $f = (float) $rate;
+                if ($f > 0) {
+                    $out[$code] = $f;
+                }
+            }
+
+            return $out;
+        } catch (\Throwable $e) {
+            Log::warning('ExchangeRateService: open.er-api exception', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+    }
+
+    /**
+     * Mescla taxas em linhas de moeda do tenant (preenche zeros).
      *
      * @param  list<array{code: string, symbol?: string, label?: string, rate_to_brl?: float}>  $existing
      * @return list<array{code: string, symbol: string, label: string, rate_to_brl: float}>
@@ -126,6 +200,21 @@ class ExchangeRateService
             }
         }
 
+        foreach ($byCode as $code => &$row) {
+            if ($code === 'BRL') {
+                $row['rate_to_brl'] = 1.0;
+
+                continue;
+            }
+            if ($row['rate_to_brl'] <= 0) {
+                $fallback = CheckoutCurrencyCatalog::fallbackRateToBrl($code);
+                if ($fallback > 0) {
+                    $row['rate_to_brl'] = $fallback;
+                }
+            }
+        }
+        unset($row);
+
         if (! isset($byCode['BRL'])) {
             $meta = CheckoutCurrencyCatalog::metadataFor('BRL');
             $byCode['BRL'] = [
@@ -134,8 +223,6 @@ class ExchangeRateService
                 'label' => $meta['label'],
                 'rate_to_brl' => 1.0,
             ];
-        } else {
-            $byCode['BRL']['rate_to_brl'] = 1.0;
         }
 
         return CheckoutCurrencyCatalog::mergeTenantCurrencies(array_values($byCode));
@@ -158,32 +245,51 @@ class ExchangeRateService
     }
 
     /**
-     * Taxas BRL → moeda (rate_to_brl), em cache 24h para vitrine/conversão sem configurar manualmente.
+     * Taxas BRL → moeda (rate_to_brl), em cache 24h.
      *
      * @return array<string, float>
      */
     public function getCachedRatesMap(): array
     {
-        return Cache::remember(
-            self::CACHE_KEY_RATES_FROM_BRL,
-            now()->addHours(self::CACHE_TTL_HOURS),
-            function (): array {
-                $codes = array_values(array_filter(
-                    CheckoutCurrencyCatalog::supportedCodes(),
-                    fn (string $c): bool => $c !== 'BRL'
-                ));
-                $fetched = $this->fetchRatesFromBrl($codes);
-                $defaults = config('products.rates', []);
-                if (! isset($fetched['USD']) || $fetched['USD'] <= 0) {
-                    $fetched['USD'] = (float) ($defaults['brl_usd'] ?? 0.18);
-                }
-                if (! isset($fetched['EUR']) || $fetched['EUR'] <= 0) {
-                    $fetched['EUR'] = (float) ($defaults['brl_eur'] ?? 0.16);
-                }
+        $cached = Cache::get(self::CACHE_KEY_RATES_FROM_BRL);
+        if (is_array($cached) && count($cached) >= self::MIN_CACHE_ENTRIES) {
+            return $cached;
+        }
 
-                return $fetched;
+        $map = $this->buildRatesMap();
+
+        if (count($map) >= self::MIN_CACHE_ENTRIES) {
+            Cache::put(self::CACHE_KEY_RATES_FROM_BRL, $map, now()->addHours(self::CACHE_TTL_HOURS));
+        }
+
+        return $map;
+    }
+
+    /**
+     * @return array<string, float>
+     */
+    private function buildRatesMap(): array
+    {
+        $map = $this->fetchAllRatesFromBrlErApi();
+
+        if (count($map) < self::MIN_CACHE_ENTRIES) {
+            $partial = $this->fetchRatesFromBrlFrankfurter(CheckoutCurrencyCatalog::supportedCodes());
+            foreach ($partial as $code => $rate) {
+                if (! isset($map[$code]) || $map[$code] <= 0) {
+                    $map[$code] = $rate;
+                }
             }
-        );
+        }
+
+        $defaults = config('products.rates', []);
+        if (! isset($map['USD']) || $map['USD'] <= 0) {
+            $map['USD'] = (float) ($defaults['brl_usd'] ?? 0.18);
+        }
+        if (! isset($map['EUR']) || $map['EUR'] <= 0) {
+            $map['EUR'] = (float) ($defaults['brl_eur'] ?? 0.16);
+        }
+
+        return $map;
     }
 
     public function forgetCachedRates(): void

@@ -192,9 +192,14 @@ class SettingsController extends Controller
                 Setting::set($key, $value ?? '', $tenantId);
             } elseif (in_array($key, $storageKeys, true)) {
                 Setting::set($key, $value ?? '', $tenantId);
-            } elseif ($key === 'checkout_translations' || $key === 'currencies') {
+            } elseif ($key === 'checkout_translations') {
                 if (is_array($value) && ! empty($value)) {
                     Setting::set($key, $value, $tenantId);
+                }
+            } elseif ($key === 'currencies') {
+                if (is_array($value) && ! empty($value)) {
+                    $resolved = CheckoutCurrencyCatalog::ensureRatesResolved($value);
+                    Setting::set($key, $resolved, $tenantId);
                 }
             } elseif ($value !== null && $value !== '') {
                 Setting::set($key, $value, $tenantId);

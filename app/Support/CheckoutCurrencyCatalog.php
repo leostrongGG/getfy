@@ -219,7 +219,34 @@ class CheckoutCurrencyCatalog
             $merged = self::mergeTenantCurrencies($tenantRows);
         }
 
-        return self::applyResolvedRates($merged);
+        return self::ensureRatesResolved($merged);
+    }
+
+    /**
+     * Garante taxas preenchidas (cache + API) antes de enviar ao checkout ou salvar settings.
+     *
+     * @param  list<array{code: string, symbol?: string, label?: string, rate_to_brl?: float}>  $rows
+     * @return list<array{code: string, symbol: string, label: string, rate_to_brl: float}>
+     */
+    public static function ensureRatesResolved(array $rows): array
+    {
+        $rows = self::applyResolvedRates($rows);
+        $missingCodes = [];
+        foreach ($rows as $row) {
+            $code = strtoupper((string) ($row['code'] ?? ''));
+            if ($code !== '' && $code !== 'BRL' && (float) ($row['rate_to_brl'] ?? 0) <= 0) {
+                $missingCodes[] = $code;
+            }
+        }
+        if ($missingCodes !== []) {
+            try {
+                $rows = app(ExchangeRateService::class)->applyRatesToCurrencyRows($rows, $missingCodes);
+            } catch (\Throwable) {
+                // mantém o que applyResolvedRates já preencheu
+            }
+        }
+
+        return $rows;
     }
 
     /**
@@ -244,8 +271,9 @@ class CheckoutCurrencyCatalog
             }
             $code = strtoupper(trim((string) $row['code']));
             $meta = self::metadataFor($code);
-            $rate = $code === 'BRL' ? 1.0 : max(0.0, (float) ($row['rate_to_brl'] ?? 0));
-            if ($rate <= 0 && isset($cached[$code]) && $cached[$code] > 0) {
+            $tenantRate = $code === 'BRL' ? 1.0 : max(0.0, (float) ($row['rate_to_brl'] ?? 0));
+            $rate = $tenantRate;
+            if (isset($cached[$code]) && $cached[$code] > 0 && ($tenantRate <= 0 || $tenantRate === 0.0)) {
                 $rate = (float) $cached[$code];
             }
             if ($rate <= 0) {
