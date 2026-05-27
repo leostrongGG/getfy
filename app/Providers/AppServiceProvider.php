@@ -155,6 +155,7 @@ class AppServiceProvider extends ServiceProvider
         Event::listen(OrderCompleted::class, SendAccessEmailOnOrderCompleted::class);
         Event::listen(OrderCompleted::class, SendPanelPushOnOrderCompleted::class);
         Event::listen(OrderCompleted::class, SendMetaPurchaseCapiOnOrderCompleted::class);
+        Event::listen(OrderCompleted::class, \App\Listeners\InvalidateDashboardCacheOnOrderCompleted::class);
         Event::listen(PixGenerated::class, SendPanelPushOnPixGenerated::class);
         Event::listen(BoletoGenerated::class, SendPanelPushOnBoletoGenerated::class);
         Event::listen(OrderRefunded::class, RevokeAccessOnOrderRefunded::class);

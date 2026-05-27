@@ -7,7 +7,7 @@ use App\Models\CheckoutSession;
 use App\Models\Order;
 use App\Models\Product;
 use App\Support\OrderCurrencyTotals;
-use Carbon\Carbon;
+use App\Support\ReportingPeriod;
 use App\Services\TeamAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -29,23 +29,20 @@ class DashboardController extends Controller
 
         $tenantId = auth()->user()->tenant_id;
         $userId = auth()->id();
-        $cacheKey = 'dashboard:' . ($tenantId ?? 'global') . ':' . $period . ':u' . ($userId ?? '0');
+        $bust = ReportingPeriod::dashboardBustToken($tenantId);
+        $dateSuffix = ReportingPeriod::dashboardCacheSuffix($period);
+        $cacheKey = 'dashboard:'.($tenantId ?? 'global').':'.$period.':'.$dateSuffix.':b'.$bust.':u'.($userId ?? '0');
+        $cacheTtl = in_array($period, ['hoje', 'ontem'], true) ? 60 : self::CACHE_TTL_SECONDS;
 
-        $payload = Cache::remember($cacheKey, self::CACHE_TTL_SECONDS, function () use ($tenantId, $period) {
-            [$start, $end] = $this->rangeForPeriod($period);
+        $payload = Cache::remember($cacheKey, $cacheTtl, function () use ($tenantId, $period) {
+            [$start, $end] = ReportingPeriod::boundsForDashboard($period);
 
             $ordersQuery = Order::forTenant($tenantId);
             if (auth()->user()?->isTeam()) {
                 $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
                 $ordersQuery->whereIn('product_id', $allowed ?: ['__none__']);
             }
-        if ($start && $end) {
-            $ordersQuery->whereBetween('created_at', [$start, $end]);
-        } elseif ($start) {
-            $ordersQuery->where('created_at', '>=', $start);
-        } elseif ($end) {
-            $ordersQuery->where('created_at', '<=', $end);
-        }
+        ReportingPeriod::applyCreatedAtBounds($ordersQuery, $start, $end);
 
         $ordersCompleted = (clone $ordersQuery)->where('status', 'completed');
         $ordersPending = (clone $ordersQuery)->where('status', 'pending');
@@ -93,13 +90,7 @@ class DashboardController extends Controller
                 $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
                 $sessionsQuery->whereIn('product_id', $allowed ?: ['__none__']);
             }
-            if ($start && $end) {
-                $sessionsQuery->whereBetween('created_at', [$start, $end]);
-            } elseif ($start) {
-                $sessionsQuery->where('created_at', '>=', $start);
-            } elseif ($end) {
-                $sessionsQuery->where('created_at', '<=', $end);
-            }
+            ReportingPeriod::applyCreatedAtBounds($sessionsQuery, $start, $end);
 
             $abandonadosVisit = (clone $sessionsQuery)
                 ->whereAbandonmentVisitEligible()
@@ -143,40 +134,6 @@ class DashboardController extends Controller
         return Inertia::render('Dashboard/Index', $data->getArrayCopy());
     }
 
-    private function rangeForPeriod(string $period): array
-    {
-        $now = Carbon::now();
-        $start = null;
-        $end = null;
-
-        switch ($period) {
-            case 'hoje':
-                $start = $now->copy()->startOfDay();
-                $end = $now->copy()->endOfDay();
-                break;
-            case 'ontem':
-                $start = $now->copy()->subDay()->startOfDay();
-                $end = $now->copy()->subDay()->endOfDay();
-                break;
-            case '7dias':
-                $start = $now->copy()->subDays(6)->startOfDay();
-                $end = $now->copy()->endOfDay();
-                break;
-            case 'mes':
-                $start = $now->copy()->startOfMonth();
-                $end = $now->copy()->endOfMonth();
-                break;
-            case 'ano':
-                $start = $now->copy()->startOfYear();
-                $end = $now->copy()->endOfYear();
-                break;
-            case 'total':
-                break;
-        }
-
-        return [$start?->toDateTimeString(), $end?->toDateTimeString()];
-    }
-
     private function gatewayLabel(?string $gateway): string
     {
         if ($gateway === null || $gateway === '') {
@@ -195,7 +152,7 @@ class DashboardController extends Controller
         return ucfirst($gateway);
     }
 
-    private function buildGraficoVendas(?int $tenantId, string $period, ?string $start, ?string $end): array
+    private function buildGraficoVendas(?int $tenantId, string $period, ?\Carbon\Carbon $start, ?\Carbon\Carbon $end): array
     {
         $query = Order::forTenant($tenantId)->where('status', 'completed');
         if (auth()->user()?->isTeam()) {
@@ -203,44 +160,45 @@ class DashboardController extends Controller
             $query->whereIn('product_id', $allowed ?: ['__none__']);
         }
 
-        if ($start && $end) {
-            $query->whereBetween('created_at', [$start, $end]);
-        } elseif ($start) {
-            $query->where('created_at', '>=', $start);
-        } elseif ($end) {
-            $query->where('created_at', '<=', $end);
-        }
+        ReportingPeriod::applyCreatedAtBounds($query, $start, $end);
 
         $isHourly = in_array($period, ['hoje', 'ontem'], true);
+        $tz = ReportingPeriod::timezone();
 
         if ($isHourly) {
-            $rows = $query
-                ->selectRaw('HOUR(created_at) as hora, SUM(amount) as total')
-                ->groupBy('hora')
-                ->orderBy('hora')
-                ->get()
-                ->keyBy('hora');
+            $totalsByHour = [];
+            $query->select(['created_at', 'amount'])->orderBy('created_at')->chunk(500, function ($orders) use (&$totalsByHour, $tz) {
+                foreach ($orders as $order) {
+                    $h = (int) $order->created_at->timezone($tz)->format('G');
+                    $totalsByHour[$h] = ($totalsByHour[$h] ?? 0.0) + (float) $order->amount;
+                }
+            });
 
             $result = [];
             for ($h = 0; $h <= 23; $h++) {
                 $result[] = [
                     'data' => (string) $h,
-                    'total' => (float) ($rows->get($h)?->total ?? 0),
+                    'total' => round((float) ($totalsByHour[$h] ?? 0), 2),
                 ];
             }
 
             return $result;
         }
 
-        $rows = $query
-            ->selectRaw('DATE(created_at) as data, SUM(amount) as total')
-            ->groupBy('data')
-            ->orderBy('data')
-            ->get();
+        $totalsByDate = [];
+        $query->select(['created_at', 'amount'])->orderBy('created_at')->chunk(500, function ($orders) use (&$totalsByDate, $tz) {
+            foreach ($orders as $order) {
+                $d = $order->created_at->timezone($tz)->format('Y-m-d');
+                $totalsByDate[$d] = ($totalsByDate[$d] ?? 0.0) + (float) $order->amount;
+            }
+        });
+        ksort($totalsByDate);
 
-        return $rows->map(fn ($r) => [
-            'data' => $r->data,
-            'total' => (float) $r->total,
-        ])->values()->all();
+        $out = [];
+        foreach ($totalsByDate as $data => $total) {
+            $out[] = ['data' => $data, 'total' => round($total, 2)];
+        }
+
+        return $out;
     }
 }

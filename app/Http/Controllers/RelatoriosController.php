@@ -7,7 +7,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\MetaCustomAudienceCsvService;
-use Carbon\Carbon;
+use App\Support\ReportingPeriod;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -29,16 +29,10 @@ class RelatoriosController extends Controller
         }
 
         $tenantId = auth()->user()->tenant_id;
-        [$start, $end] = $this->rangeForPeriod($period);
+        [$start, $end] = ReportingPeriod::boundsForDashboard($period);
 
         $ordersQuery = Order::forTenant($tenantId);
-        if ($start && $end) {
-            $ordersQuery->whereBetween('created_at', [$start, $end]);
-        } elseif ($start) {
-            $ordersQuery->where('created_at', '>=', $start);
-        } elseif ($end) {
-            $ordersQuery->where('created_at', '<=', $end);
-        }
+        ReportingPeriod::applyCreatedAtBounds($ordersQuery, $start, $end);
 
         $ordersCompleted = (clone $ordersQuery)->where('status', 'completed');
         $ordersRefunded = (clone $ordersQuery)->where('status', 'refunded');
@@ -101,13 +95,7 @@ class RelatoriosController extends Controller
             ->all();
 
         $sessionsQuery = CheckoutSession::forTenant($tenantId);
-        if ($start && $end) {
-            $sessionsQuery->whereBetween('created_at', [$start, $end]);
-        } elseif ($start) {
-            $sessionsQuery->where('created_at', '>=', $start);
-        } elseif ($end) {
-            $sessionsQuery->where('created_at', '<=', $end);
-        }
+        ReportingPeriod::applyCreatedAtBounds($sessionsQuery, $start, $end);
 
         $abandonadosVisit = (clone $sessionsQuery)
             ->whereAbandonmentVisitEligible()
@@ -132,13 +120,7 @@ class RelatoriosController extends Controller
             ->whereAbandonmentFormEligible()
             ->whereNotNull('email')
             ->where('email', '!=', '');
-        if ($start && $end) {
-            $abandonadosComEmail->whereBetween('created_at', [$start, $end]);
-        } elseif ($start) {
-            $abandonadosComEmail->where('created_at', '>=', $start);
-        } elseif ($end) {
-            $abandonadosComEmail->where('created_at', '<=', $end);
-        }
+        ReportingPeriod::applyCreatedAtBounds($abandonadosComEmail, $start, $end);
         $abandonadosComEmail = $abandonadosComEmail
             ->with('product:id,name')
             ->orderByDesc('updated_at')
@@ -193,40 +175,6 @@ class RelatoriosController extends Controller
         return $this->metaCustomAudienceCsv->streamAbandonedEngaged($request->user(), $data['product_id']);
     }
 
-    private function rangeForPeriod(string $period): array
-    {
-        $now = Carbon::now();
-        $start = null;
-        $end = null;
-
-        switch ($period) {
-            case 'hoje':
-                $start = $now->copy()->startOfDay();
-                $end = $now->copy()->endOfDay();
-                break;
-            case 'ontem':
-                $start = $now->copy()->subDay()->startOfDay();
-                $end = $now->copy()->subDay()->endOfDay();
-                break;
-            case '7dias':
-                $start = $now->copy()->subDays(6)->startOfDay();
-                $end = $now->copy()->endOfDay();
-                break;
-            case 'mes':
-                $start = $now->copy()->startOfMonth();
-                $end = $now->copy()->endOfMonth();
-                break;
-            case 'ano':
-                $start = $now->copy()->startOfYear();
-                $end = $now->copy()->endOfYear();
-                break;
-            case 'total':
-                break;
-        }
-
-        return [$start?->toDateTimeString(), $end?->toDateTimeString()];
-    }
-
     private function gatewayLabel(?string $gateway): string
     {
         if ($gateway === null || $gateway === '') {
@@ -246,27 +194,26 @@ class RelatoriosController extends Controller
         return ucfirst($gateway);
     }
 
-    private function buildGraficoReceita(?int $tenantId, ?string $start, ?string $end): array
+    private function buildGraficoReceita(?int $tenantId, ?\Carbon\Carbon $start, ?\Carbon\Carbon $end): array
     {
         $query = Order::forTenant($tenantId)->where('status', 'completed');
+        ReportingPeriod::applyCreatedAtBounds($query, $start, $end);
 
-        if ($start && $end) {
-            $query->whereBetween('created_at', [$start, $end]);
-        } elseif ($start) {
-            $query->where('created_at', '>=', $start);
-        } elseif ($end) {
-            $query->where('created_at', '<=', $end);
+        $totalsByDate = [];
+        $tz = ReportingPeriod::timezone();
+        $query->select(['created_at', 'amount'])->orderBy('created_at')->chunk(500, function ($orders) use (&$totalsByDate, $tz) {
+            foreach ($orders as $order) {
+                $d = $order->created_at->timezone($tz)->format('Y-m-d');
+                $totalsByDate[$d] = ($totalsByDate[$d] ?? 0.0) + (float) $order->amount;
+            }
+        });
+        ksort($totalsByDate);
+
+        $out = [];
+        foreach ($totalsByDate as $data => $total) {
+            $out[] = ['data' => $data, 'total' => round($total, 2)];
         }
 
-        $rows = $query
-            ->selectRaw('DATE(created_at) as data, SUM(amount) as total')
-            ->groupBy('data')
-            ->orderBy('data')
-            ->get();
-
-        return $rows->map(fn ($r) => [
-            'data' => $r->data,
-            'total' => (float) $r->total,
-        ])->values()->all();
+        return $out;
     }
 }

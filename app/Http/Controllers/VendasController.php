@@ -12,6 +12,7 @@ use App\Services\AccessEmailService;
 use App\Services\RefundService;
 use App\Services\TeamAccessService;
 use App\Support\OrderCurrencyTotals;
+use App\Support\ReportingPeriod;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -59,39 +60,8 @@ class VendasController extends Controller
             return $query;
         }
 
-        $now = now();
-        $start = null;
-        $end = null;
-
-        if ($period === 'today') {
-            $start = $now->copy()->startOfDay();
-            $end = $now->copy()->endOfDay();
-        } elseif ($period === '7d') {
-            $start = $now->copy()->subDays(6)->startOfDay();
-            $end = $now->copy()->endOfDay();
-        } elseif ($period === '30d') {
-            $start = $now->copy()->subDays(29)->startOfDay();
-            $end = $now->copy()->endOfDay();
-        } elseif ($period === 'this_month') {
-            $start = $now->copy()->startOfMonth();
-            $end = $now->copy()->endOfDay();
-        } elseif ($period === 'last_month') {
-            $start = $now->copy()->subMonthNoOverflow()->startOfMonth();
-            $end = $now->copy()->subMonthNoOverflow()->endOfMonth();
-        } elseif ($period === 'custom') {
-            $start = $from ? \Illuminate\Support\Carbon::parse($from)->startOfDay() : null;
-            $end = $to ? \Illuminate\Support\Carbon::parse($to)->endOfDay() : null;
-        }
-
-        if ($start && $end) {
-            return $query->whereBetween('created_at', [$start, $end]);
-        }
-        if ($start) {
-            return $query->where('created_at', '>=', $start);
-        }
-        if ($end) {
-            return $query->where('created_at', '<=', $end);
-        }
+        [$start, $end] = ReportingPeriod::boundsForVendas($period, $from, $to);
+        ReportingPeriod::applyCreatedAtBounds($query, $start, $end);
 
         return $query;
     }
