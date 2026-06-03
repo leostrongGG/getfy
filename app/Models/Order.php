@@ -130,8 +130,12 @@ class Order extends Model
 
         $trackingMeta = $session->tracking_metadata;
         if (is_array($trackingMeta)) {
+            $allowed = \App\Support\WebhookPayloadBuilder::allowedTrackingKeys();
             foreach ($trackingMeta as $k => $v) {
-                if (! is_string($k) || $k === '') {
+                if (! is_string($k) || $k === '' || \App\Support\WebhookPayloadBuilder::isDeniedKey($k)) {
+                    continue;
+                }
+                if (! in_array($k, $allowed, true)) {
                     continue;
                 }
                 if (! is_string($v) && ! is_numeric($v)) {

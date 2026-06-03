@@ -1,6 +1,6 @@
 <script setup>
-import { ref, computed, defineAsyncComponent } from 'vue';
-import { useForm } from '@inertiajs/vue3';
+import { ref, computed } from 'vue';
+import { useForm, usePage } from '@inertiajs/vue3';
 import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import Button from '@/components/ui/Button.vue';
 import {
@@ -100,26 +100,23 @@ function isPluginTab(tabId) {
     return pluginTabIds.value.includes(tabId);
 }
 
-const pluginPagesGlob = import.meta.glob('../../PluginPages/**/*.vue');
-const pluginTabComponentCache = new Map();
+import { usePluginComponentResolver } from '@/composables/usePluginComponentResolver';
 
-function getPluginTabComponent(componentName) {
-    if (!componentName || typeof componentName !== 'string') {
+const pluginPagesGlob = import.meta.glob('../../PluginPages/**/*.vue');
+const page = usePage();
+const { resolve: resolvePluginTabComponent } = usePluginComponentResolver(
+    computed(() => page.props.plugin_ui),
+    pluginPagesGlob,
+);
+
+function getPluginTabComponent(tab) {
+    if (!tab) {
         return null;
     }
-    if (pluginTabComponentCache.has(componentName)) {
-        return pluginTabComponentCache.get(componentName);
+    if (typeof tab === 'object' && (tab.ui_mode || tab.component)) {
+        return resolvePluginTabComponent(tab);
     }
-    const rel = componentName.startsWith('Plugin/') ? componentName.slice(7) : componentName;
-    const path = `../../PluginPages/${rel}.vue`;
-    const loader = pluginPagesGlob[path];
-    if (!loader) {
-        pluginTabComponentCache.set(componentName, null);
-        return null;
-    }
-    const asyncComp = defineAsyncComponent(loader);
-    pluginTabComponentCache.set(componentName, asyncComp);
-    return asyncComp;
+    return resolvePluginTabComponent({ component: tab, ui_mode: 'legacy' });
 }
 
 const defaultTranslations = () => ({
@@ -1212,7 +1209,7 @@ const selectClass =
 
         <template v-for="pt in settings_plugin_tabs" :key="pt.id">
             <div v-show="activeTab === pt.id" class="w-full max-w-full space-y-6">
-                <component :is="getPluginTabComponent(pt.component)" v-if="getPluginTabComponent(pt.component)" />
+                <component :is="getPluginTabComponent(pt)" v-if="getPluginTabComponent(pt)" />
                 <p v-else class="text-sm text-red-600 dark:text-red-400">
                     Componente do plugin não encontrado: {{ pt.component }}
                 </p>

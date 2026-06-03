@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Events\DashboardLoading;
+use App\Plugins\PluginExtensionRegistry;
 use App\Models\CheckoutSession;
 use App\Models\Order;
 use App\Models\Product;
@@ -133,6 +134,7 @@ class DashboardController extends Controller
 
         return Inertia::render('Dashboard/Index', array_merge($data->getArrayCopy(), [
             'layoutFullWidth' => true,
+            'plugin_dashboard_widgets' => PluginExtensionRegistry::getDashboardWidgets(),
         ]));
     }
 

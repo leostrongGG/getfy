@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "chunks": {
+    "main": "plugin-ui.js"
+  },
+  "exports": [
+    "SettingsTab",
+    "DashboardPage"
+  ]
+}

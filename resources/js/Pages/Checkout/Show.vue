@@ -22,6 +22,7 @@ import {
     normalizeContentBlocksForPreview,
     dedupeContentBlocks,
 } from '@/lib/checkoutContentFormats';
+import { registerPluginCheckoutComponents } from '@/composables/usePluginCheckoutRegistry';
 import {
     PREVIEW_MESSAGE_TYPE,
     PREVIEW_ACK_TYPE,
@@ -384,6 +385,7 @@ onMounted(() => {
     }
     applyGeoLocaleFromServer();
     persistSessionCountryFromClient();
+    registerPluginCheckoutComponents(page.props.plugin_ui, props.available_payment_methods);
 });
 
 if (typeof window !== 'undefined' && (props.checkout_builder_preview || isCheckoutBuilderPreviewUrl())) {

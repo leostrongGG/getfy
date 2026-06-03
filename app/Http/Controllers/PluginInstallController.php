@@ -250,6 +250,12 @@ class PluginInstallController extends Controller
         }
 
         $pluginSlug = $plugin['slug'];
+        $validationErrors = PluginRegistry::validatePluginPackage($plugin['path']);
+        if ($validationErrors !== []) {
+            return $this->pluginsIndexRedirect([
+                'error' => 'Plugin instalado com avisos de validação: '.implode(' ', $validationErrors),
+            ]);
+        }
         PluginRegistry::register($pluginSlug);
         $migrationsPath = $plugin['migrations'] ?? null;
         if (is_string($migrationsPath) && $migrationsPath !== '') {

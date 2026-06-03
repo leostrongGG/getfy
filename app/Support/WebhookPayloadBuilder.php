@@ -26,6 +26,35 @@ class WebhookPayloadBuilder
         'sck',
     ];
 
+    /** Chaves que nunca devem ir para webhooks de integração (PII técnico / infra). */
+    private const DENIED_PAYLOAD_KEYS = [
+        'customer_ip',
+        'ip',
+        'ip_address',
+        'client_ip',
+        'server_ip',
+        'remote_addr',
+        'x_forwarded_for',
+        'host',
+        'hostname',
+        'server',
+        'vps',
+        'password',
+        'plain_password',
+        'api_secret',
+        'webhook_secret',
+        'bearer_token',
+    ];
+
+    /** @var list<string> */
+    private const PLAIN_PII_KEYS = ['email', 'phone', 'cpf', 'name'];
+
+    /** @var list<string> */
+    public static function allowedTrackingKeys(): array
+    {
+        return array_merge(self::TRACKING_KEYS, ['affiliate_code', 'sale_channel']);
+    }
+
     /**
      * @param  array<string, mixed>  $extras  pix, boleto, access, test flags, etc.
      * @return array<string, mixed>
@@ -63,7 +92,7 @@ class WebhookPayloadBuilder
             $payload['order_bumps'] = $bumps;
         }
 
-        return array_merge($payload, $extras);
+        return self::sanitizePayload(array_merge($payload, self::sanitizeExtras($extras)));
     }
 
     /**
@@ -78,23 +107,26 @@ class WebhookPayloadBuilder
         $plan = $session->subscriptionPlan;
         $slug = $session->checkout_slug ?? $product?->checkout_slug ?? '';
 
-        return [
-            'checkout_session' => [
+        $sessionCustomer = WebhookPiiHasher::customerIdentifiers(
+            $session->email,
+            null,
+            null,
+            $session->name,
+        );
+
+        return self::sanitizePayload([
+            'checkout_session' => array_filter([
                 'id' => $session->id,
-                'email' => $session->email,
-                'name' => $session->name,
                 'created_at' => $session->created_at?->toIso8601String(),
-            ],
-            'customer' => [
-                'name' => $session->name ?? '',
-                'email' => $session->email ?? '',
-            ],
+                ...$sessionCustomer,
+            ]),
+            'customer' => $sessionCustomer,
             'checkout_link' => self::checkoutLinkFromSlug($slug),
             'product' => self::productSnapshot($product),
             'offer' => self::offerSnapshot($offer),
             'subscription_plan' => self::planSnapshot($plan),
             'tracking' => self::trackingFromSession($session),
-        ];
+        ]);
     }
 
     /**
@@ -119,7 +151,7 @@ class WebhookPayloadBuilder
             ?? $subscription->product?->checkout_slug
             ?? '';
 
-        return [
+        return self::sanitizePayload([
             'subscription' => [
                 'id' => $subscription->id,
                 'status' => $subscription->status,
@@ -131,15 +163,16 @@ class WebhookPayloadBuilder
                 'days_overdue' => $daysOverdue,
                 'cancelled_at' => $subscription->cancelled_at?->toIso8601String(),
             ],
-            'customer' => [
-                'name' => $subscription->user?->name ?? '',
-                'email' => $subscription->user?->email ?? '',
-                'phone' => $subscription->user?->phone ?? '',
-            ],
+            'customer' => WebhookPiiHasher::customerIdentifiers(
+                $subscription->user?->email,
+                $subscription->user?->phone,
+                null,
+                $subscription->user?->name,
+            ),
             'checkout_link' => self::checkoutLinkFromSlug($slug),
             'product' => self::productSnapshot($subscription->product),
             'subscription_plan' => self::planSnapshot($subscription->subscriptionPlan),
-        ];
+        ]);
     }
 
     /**
@@ -166,16 +199,18 @@ class WebhookPayloadBuilder
     }
 
     /**
-     * @return array{name: string, email: string, phone: string, cpf: string}
+     * Identificadores do comprador: por padrão só SHA-256 (compatível Meta CAPI / LGPD).
+     *
+     * @return array<string, string>
      */
     private static function customerFromOrder(Order $order): array
     {
-        return [
-            'name' => $order->user?->name ?? '',
-            'email' => $order->email ?? '',
-            'phone' => $order->phone ?? '',
-            'cpf' => $order->cpf ?? '',
-        ];
+        return WebhookPiiHasher::customerIdentifiers(
+            $order->email,
+            $order->phone,
+            $order->cpf,
+            $order->user?->name,
+        );
     }
 
     private static function checkoutLinkFromSlug(string $slug): string
@@ -353,10 +388,118 @@ class WebhookPayloadBuilder
         ];
 
         foreach (self::TRACKING_KEYS as $key) {
+            if (self::isDeniedKey($key)) {
+                continue;
+            }
             $tracking[$key] = self::stringOrNull($source[$key] ?? null);
         }
 
         return $tracking;
+    }
+
+    public static function isDeniedKey(string $key): bool
+    {
+        $key = strtolower($key);
+        if (in_array($key, self::DENIED_PAYLOAD_KEYS, true)) {
+            return true;
+        }
+        if (! WebhookPiiHasher::includesPlainCustomerPii() && in_array($key, self::PLAIN_PII_KEYS, true)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $extras
+     * @return array<string, mixed>
+     */
+    public static function sanitizeExtras(array $extras): array
+    {
+        if (isset($extras['pix']) && is_array($extras['pix'])) {
+            $extras['pix'] = self::sanitizePixPayload($extras['pix']);
+        }
+        if (isset($extras['access']) && is_array($extras['access'])) {
+            $extras['access'] = self::sanitizeAccessPayload($extras['access']);
+        }
+
+        return self::stripDeniedKeysRecursive($extras);
+    }
+
+    /**
+     * @param  array<string, mixed>  $pix
+     * @return array<string, mixed>
+     */
+    public static function sanitizePixPayload(array $pix): array
+    {
+        $out = [
+            'copy_paste' => $pix['copy_paste'] ?? null,
+            'transaction_id' => $pix['transaction_id'] ?? null,
+        ];
+        $qr = $pix['qrcode'] ?? null;
+        if (is_string($qr) && $qr !== '' && ! self::looksLikeEmbeddedImage($qr)) {
+            $out['qrcode'] = $qr;
+        }
+
+        return array_filter($out, fn ($v) => $v !== null && $v !== '');
+    }
+
+    /**
+     * @param  array<string, mixed>  $access
+     * @return array<string, mixed>
+     */
+    public static function sanitizeAccessPayload(array $access): array
+    {
+        $safe = [];
+        foreach (['type', 'link', 'product_type'] as $key) {
+            if (isset($access[$key]) && is_scalar($access[$key])) {
+                $safe[$key] = $access[$key];
+            }
+        }
+
+        return $safe;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    public static function sanitizePayload(array $payload): array
+    {
+        return self::stripDeniedKeysRecursive($payload);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private static function stripDeniedKeysRecursive(array $data): array
+    {
+        $out = [];
+        foreach ($data as $key => $value) {
+            if (! is_string($key) || self::isDeniedKey($key)) {
+                continue;
+            }
+            if (is_array($value)) {
+                $nested = self::stripDeniedKeysRecursive($value);
+                if ($nested !== []) {
+                    $out[$key] = $nested;
+                }
+
+                continue;
+            }
+            if ($value !== null && $value !== '') {
+                $out[$key] = $value;
+            }
+        }
+
+        return $out;
+    }
+
+    private static function looksLikeEmbeddedImage(string $value): bool
+    {
+        return str_starts_with($value, 'data:image/')
+            || (strlen($value) > 2048 && preg_match('/^[A-Za-z0-9+\/=]+$/', substr($value, 0, 256)) === 1);
     }
 
     /**
@@ -408,10 +551,10 @@ class WebhookPayloadBuilder
                 'created_at' => now()->toIso8601String(),
             ],
             'customer' => [
-                'name' => 'Cliente Exemplo',
-                'email' => 'exemplo@email.com',
-                'phone' => '11999999999',
-                'cpf' => '12345678900',
+                'email_hash' => hash('sha256', 'exemplo@email.com'),
+                'phone_hash' => hash('sha256', '5511999999999'),
+                'cpf_hash' => hash('sha256', '12345678900'),
+                'name_hash' => hash('sha256', 'cliente exemplo'),
             ],
             'checkout_link' => $checkoutLink,
             'product' => [

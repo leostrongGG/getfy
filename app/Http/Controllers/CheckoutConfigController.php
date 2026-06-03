@@ -7,6 +7,7 @@ use App\Models\Product;
 use App\Models\ProductOffer;
 use App\Services\StorageService;
 use App\Models\SubscriptionPlan;
+use App\Plugins\PluginExtensionRegistry;
 use App\Support\CheckoutConfigNormalizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -71,6 +72,7 @@ class CheckoutConfigController extends Controller
             'config' => $config,
             'checkout_scope' => $scope,
             'cupons' => $cupons,
+            'plugin_checkout_templates' => PluginExtensionRegistry::getCheckoutBuilderTemplates(),
             'layoutFullWidth' => true,
         ]);
     }

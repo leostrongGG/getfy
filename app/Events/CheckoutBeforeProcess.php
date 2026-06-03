@@ -2,6 +2,7 @@
 
 namespace App\Events;
 
+use App\Models\CommerceCart;
 use App\Models\Product;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
@@ -17,6 +18,7 @@ class CheckoutBeforeProcess
 
     public function __construct(
         public Product $product,
-        public array $validated
+        public array $validated,
+        public ?CommerceCart $cart = null,
     ) {}
 }

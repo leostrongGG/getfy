@@ -47,7 +47,11 @@ const props = defineProps({
     card_pagarme_public_key: { type: String, default: '' },
     /** Base da API v5 para tokenização (igual config/services.pagarme.base_url). */
     card_pagarme_api_base_url: { type: String, default: 'https://api.pagar.me/core/v5' },
+    commerce_checkout: { type: Boolean, default: false },
+    commerce_line_items: { type: Array, default: () => [] },
 });
+
+const payUrl = computed(() => (props.commerce_checkout ? '/commerce/checkout/pay' : '/api-checkout/pay'));
 
 const page = usePage();
 const flashError = computed(() => page.props.flash?.error ?? null);
@@ -330,7 +334,7 @@ function submitPixAuto() {
         return;
     }
     pixAutoForm.cpf = cpfDigits;
-    pixAutoForm.post('/api-checkout/pay', { preserveScroll: true, onError });
+    pixAutoForm.post(payUrl.value, { preserveScroll: true, onError });
 }
 
 onMounted(() => {
@@ -379,7 +383,7 @@ async function initMercadopagoBrick() {
                 return new Promise((resolve, reject) => {
                     cardSubmitting.value = true;
                     error.value = '';
-                    router.post('/api-checkout/pay', {
+                    router.post(payUrl.value, {
                         session_token: props.session_token,
                         payment_method: 'card',
                         payment_token: JSON.stringify(formData),
@@ -456,7 +460,7 @@ async function submitCard(ev) {
                 cardSubmitting.value = false;
                 return;
             }
-            router.post('/api-checkout/pay', {
+            router.post(payUrl.value, {
                 session_token: props.session_token,
                 payment_method: 'card',
                 payment_token: paymentMethod.id,
@@ -543,7 +547,7 @@ async function submitCard(ev) {
                 }
             }
             const last4 = numberDigits.slice(-4);
-            router.post('/api-checkout/pay', {
+            router.post(payUrl.value, {
                 session_token: props.session_token,
                 payment_method: 'card',
                 payment_token: JSON.stringify({ card_token: tokenId, installments: 1 }),
@@ -599,7 +603,7 @@ async function submitCard(ev) {
                 return;
             }
             const last4 = numberDigits.slice(-4);
-            router.post('/api-checkout/pay', {
+            router.post(payUrl.value, {
                 session_token: props.session_token,
                 payment_method: 'card',
                 payment_token: paymentToken,
@@ -741,7 +745,7 @@ async function submitCard(ev) {
                         <template v-else-if="selectedMethod === 'pix'">
                             <div class="rounded-xl border-2 border-zinc-200 bg-zinc-50/30 p-4 space-y-4">
                                 <p class="text-sm text-zinc-600">Clique abaixo para gerar o QR Code PIX. Você será redirecionado para a página de pagamento.</p>
-                                <form @submit.prevent="pixForm.post('/api-checkout/pay', { preserveScroll: true, onError })">
+                                <form @submit.prevent="pixForm.post(payUrl, { preserveScroll: true, onError })">
                                     <div class="flex gap-2">
                                         <button
                                             type="button"
@@ -804,7 +808,7 @@ async function submitCard(ev) {
                         <template v-else-if="selectedMethod === 'boleto'">
                             <div class="rounded-xl border-2 border-zinc-200 bg-zinc-50/30 p-4 space-y-4">
                                 <p class="text-sm text-zinc-600">Clique abaixo para gerar o boleto. Você será redirecionado para a página com o código de barras e o link para download.</p>
-                                <form @submit.prevent="boletoForm.post('/api-checkout/pay', { preserveScroll: true, onError })">
+                                <form @submit.prevent="boletoForm.post(payUrl, { preserveScroll: true, onError })">
                                     <div class="flex gap-2">
                                         <button
                                             type="button"

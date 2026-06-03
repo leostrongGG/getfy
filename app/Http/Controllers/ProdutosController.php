@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Events\ProductBeforeSave;
+use App\Events\ProductPublished;
 use App\Events\ProductCreated;
 use App\Events\ProductDeleted;
 use App\Events\ProductDuplicated;
@@ -17,6 +18,7 @@ use App\Models\ProductOrderBump;
 use App\Models\Setting;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
+use App\Plugins\PluginExtensionRegistry;
 use App\Plugins\PluginRegistry;
 use App\Services\StorageService;
 use App\Services\TeamAccessService;
@@ -71,8 +73,8 @@ class ProdutosController extends Controller
             'billingTypes' => $billingTypes,
             'exchange_rates' => $this->legacyExchangeRatesMap($tenantCurrencies),
             'tenant_currencies' => $tenantCurrencies,
-            'plugin_card_actions' => [],
-            'plugin_form_sections' => [],
+            'plugin_card_actions' => PluginExtensionRegistry::getNormalizedProductCardActions(),
+            'plugin_form_sections' => PluginExtensionRegistry::getProductFormSections(),
         ]);
         event(new ProductIndexLoading($data));
         $payload = $data->getArrayCopy();
@@ -128,6 +130,9 @@ class ProdutosController extends Controller
         }
 
         event(new ProductCreated($product));
+        if ($product->is_active) {
+            event(new ProductPublished($product));
+        }
 
         return redirect()->route('produtos.index')->with('success', 'Produto criado.');
     }
@@ -747,7 +752,11 @@ class ProdutosController extends Controller
         unset($validated['conversion_pixels']);
         $baseInterval = $validated['base_interval'] ?? null;
         unset($validated['base_interval']);
+        $wasActive = (bool) $produto->is_active;
         $produto->update($validated);
+        if (! $wasActive && $produto->fresh()->is_active) {
+            event(new ProductPublished($produto->fresh()));
+        }
 
         if ($produto->billing_type === Product::BILLING_SUBSCRIPTION && $baseInterval !== null) {
             $basePlan = $produto->subscriptionPlans()->orderBy('position')->first();

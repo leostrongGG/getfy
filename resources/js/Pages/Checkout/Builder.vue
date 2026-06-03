@@ -46,6 +46,7 @@ const props = defineProps({
         default: () => ({ type: 'main', offer_id: null, plan_id: null, checkout_slug: null, label: '' }),
     },
     cupons: { type: Array, default: () => [] },
+    plugin_checkout_templates: { type: Array, default: () => [] },
 });
 
 const activeTab = ref('geral');
@@ -393,10 +394,19 @@ const advancedEditorTabs = [
     { id: 'js', label: 'JavaScript' },
 ];
 
-/** Templates de checkout disponíveis. Pode ser estendido por plugins (registro de templates). */
-const availableCheckoutTemplates = [
-    { id: 'original', name: 'Original', description: 'Layout padrão do checkout (resumo, formulário e sidebar).' },
-];
+/** Templates de checkout disponíveis. Core + plugin_checkout_templates (manifest). */
+const availableCheckoutTemplates = computed(() => {
+    const core = [
+        { id: 'original', name: 'Original', description: 'Layout padrão do checkout (resumo, formulário e sidebar).' },
+    ];
+    const fromPlugins = (props.plugin_checkout_templates || []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        description: t.description || '',
+        plugin_slug: t.plugin_slug,
+    }));
+    return [...core, ...fromPlugins];
+});
 
 const inputClass =
     'block w-full rounded-xl border-2 border-zinc-200 bg-white px-4 py-2.5 text-zinc-900 placeholder-zinc-400 transition focus:border-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white dark:placeholder-zinc-500';

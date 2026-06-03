@@ -139,22 +139,13 @@ const pluginTabs = computed(() => {
 
 const TABS = computed(() => [...BASE_TABS, ...pluginTabs.value]);
 
+import { usePluginComponentResolver } from '@/composables/usePluginComponentResolver';
+
 const pluginPagesGlob = import.meta.glob('../../PluginPages/**/*.vue');
-const pluginComponentCache = new Map();
-function resolvePluginComponent(componentName) {
-    if (!componentName || typeof componentName !== 'string') return null;
-    if (pluginComponentCache.has(componentName)) return pluginComponentCache.get(componentName);
-    const rel = componentName.startsWith('Plugin/') ? componentName.slice(7) : componentName;
-    const path = `../../PluginPages/${rel}.vue`;
-    const loader = pluginPagesGlob[path];
-    if (!loader) {
-        pluginComponentCache.set(componentName, null);
-        return null;
-    }
-    const asyncComp = defineAsyncComponent(loader);
-    pluginComponentCache.set(componentName, asyncComp);
-    return asyncComp;
-}
+const { resolve: resolvePluginComponent } = usePluginComponentResolver(
+    computed(() => page.props.plugin_ui),
+    pluginPagesGlob,
+);
 
 const page = usePage();
 const currentTab = computed(() => {
@@ -3442,8 +3433,8 @@ function submit() {
                     </div>
                     <div class="p-6">
                         <component
-                            v-if="pt.pluginPanel?.component && resolvePluginComponent(pt.pluginPanel.component)"
-                            :is="resolvePluginComponent(pt.pluginPanel.component)"
+                            v-if="pt.pluginPanel && resolvePluginComponent(pt.pluginPanel)"
+                            :is="resolvePluginComponent(pt.pluginPanel)"
                             :produto="produto"
                         />
                         <div v-else class="rounded-lg border border-dashed border-zinc-300 p-3 text-sm text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">

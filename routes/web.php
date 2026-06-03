@@ -136,6 +136,27 @@ Route::get('/api-checkout/order-status', [\App\Http\Controllers\ApiCheckoutContr
 Route::get('/api-checkout/card-confirm', [\App\Http\Controllers\ApiCheckoutController::class, 'cardConfirm'])->name('api-checkout.card-confirm');
 Route::get('/api-checkout/obrigado', [\App\Http\Controllers\ApiCheckoutController::class, 'thankYou'])->name('api-checkout.thank-you');
 
+// Commerce (loja / carrinho multi-produto — core para plugins de vitrine)
+Route::middleware(['web', 'throttle:120,1', \App\Http\Middleware\ResolveStorefrontTenant::class])
+    ->prefix('commerce')
+    ->group(function () {
+        Route::get('/catalog/products', [\App\Http\Controllers\Commerce\CommerceCatalogController::class, 'products'])->name('commerce.catalog.products');
+        Route::get('/catalog/products/{idOrSlug}', [\App\Http\Controllers\Commerce\CommerceCatalogController::class, 'product'])->name('commerce.catalog.product');
+        Route::get('/cart', [\App\Http\Controllers\Commerce\CommerceCartController::class, 'show'])->name('commerce.cart.show');
+        Route::post('/cart/lines', [\App\Http\Controllers\Commerce\CommerceCartController::class, 'addLine'])->name('commerce.cart.lines.add');
+        Route::patch('/cart/lines/{lineId}', [\App\Http\Controllers\Commerce\CommerceCartController::class, 'updateLine'])->name('commerce.cart.lines.update');
+        Route::delete('/cart/lines/{lineId}', [\App\Http\Controllers\Commerce\CommerceCartController::class, 'removeLine'])->name('commerce.cart.lines.remove');
+        Route::delete('/cart', [\App\Http\Controllers\Commerce\CommerceCartController::class, 'clear'])->name('commerce.cart.clear');
+        Route::post('/checkout/start', [\App\Http\Controllers\Commerce\CommerceCartController::class, 'startCheckout'])->name('commerce.checkout.start');
+    });
+
+Route::get('/commerce/checkout/{token}', [\App\Http\Controllers\Commerce\CommerceCheckoutController::class, 'show'])
+    ->name('commerce.checkout.show')
+    ->where('token', '[a-zA-Z0-9]{32,64}');
+Route::post('/commerce/checkout/pay', [\App\Http\Controllers\Commerce\CommerceCheckoutController::class, 'process'])
+    ->name('commerce.checkout.process')
+    ->middleware(['checkout.reuse-pix', 'throttle:checkout-process', 'throttle:checkout-pix', 'throttle:checkout-card', 'checkout.abuse']);
+
 Route::get('/c/{slug}', [\App\Http\Controllers\CheckoutController::class, 'show'])
     ->name('checkout.show')
     ->where('slug', '[a-z0-9]{6,16}')

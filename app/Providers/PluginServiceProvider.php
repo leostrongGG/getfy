@@ -2,13 +2,26 @@
 
 namespace App\Providers;
 
+use App\Plugins\PluginApiRouteRegistrar;
+use App\Plugins\PluginPublicRouteRegistrar;
 use App\Plugins\PluginRegistry;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 
 class PluginServiceProvider extends ServiceProvider
 {
+    /** @var list<string> */
+    private const ALLOWED_MIDDLEWARE = [
+        'web',
+        'auth',
+        'throttle:60,1',
+        'throttle:120,1',
+        'role:admin|infoprodutor',
+        'verified',
+    ];
+
     public function register(): void
     {
         //
@@ -22,14 +35,18 @@ class PluginServiceProvider extends ServiceProvider
         foreach ($plugins as $plugin) {
             $this->loadPluginBootstrap($plugin);
             $this->loadPluginMigrations($plugin);
+            $this->loadPluginEvents($plugin);
+            $this->loadPluginCommands($plugin);
+            $this->loadPluginSchedule($plugin);
             $this->loadPluginRoutes($plugin);
             $this->loadPluginPublicRoutes($plugin);
+            $this->loadPluginApiRoutes($plugin);
+            $this->loadPluginViews($plugin);
+            $this->loadPluginMiddleware($plugin);
         }
     }
 
     /**
-     * Plugins to load: when registry table exists, only enabled; else fallback to all on disk with manifest.
-     *
      * @return array<int, array{slug: string, path: string, menu?: array, routes?: string|array, events?: array}>
      */
     private function getPluginsToLoad(): array
@@ -44,9 +61,6 @@ class PluginServiceProvider extends ServiceProvider
         return $this->fallbackInstalledFromDisk();
     }
 
-    /**
-     * Fallback when plugins table does not exist: load every dir with plugin.json.
-     */
     private function fallbackInstalledFromDisk(): array
     {
         return PluginRegistry::fallbackRowsWithoutDatabase();
@@ -77,6 +91,73 @@ class PluginServiceProvider extends ServiceProvider
         }
     }
 
+    private function loadPluginEvents(array $plugin): void
+    {
+        $events = $plugin['events'] ?? null;
+        if (! is_array($events)) {
+            return;
+        }
+        foreach ($events as $eventClass => $listeners) {
+            if (! is_string($eventClass) || $eventClass === '') {
+                continue;
+            }
+            if (! is_array($listeners)) {
+                $listeners = [$listeners];
+            }
+            foreach ($listeners as $listener) {
+                if (is_string($listener) && $listener !== '' && class_exists($listener)) {
+                    Event::listen($eventClass, $listener);
+                }
+            }
+        }
+    }
+
+    private function loadPluginCommands(array $plugin): void
+    {
+        $commands = $plugin['commands'] ?? null;
+        if (! is_array($commands)) {
+            return;
+        }
+        $resolved = [];
+        foreach ($commands as $command) {
+            if (is_string($command) && $command !== '' && class_exists($command)) {
+                $resolved[] = $command;
+            }
+        }
+        if ($resolved !== []) {
+            $this->commands($resolved);
+        }
+    }
+
+    private function loadPluginSchedule(array $plugin): void
+    {
+        $scheduleDecl = $plugin['schedule'] ?? null;
+        if (! is_array($scheduleDecl) || $scheduleDecl === []) {
+            return;
+        }
+        $this->app->booted(function () use ($scheduleDecl) {
+            $schedule = $this->app->make(Schedule::class);
+            foreach ($scheduleDecl as $entry) {
+                if (! is_array($entry)) {
+                    continue;
+                }
+                $command = $entry['command'] ?? $entry['artisan'] ?? null;
+                if (! is_string($command) || $command === '') {
+                    continue;
+                }
+                $event = $schedule->command($command);
+                $cron = $entry['cron'] ?? $entry['expression'] ?? null;
+                if (is_string($cron) && $cron !== '') {
+                    $event->cron($cron);
+                } elseif (! empty($entry['daily'])) {
+                    $event->daily();
+                } elseif (! empty($entry['hourly'])) {
+                    $event->hourly();
+                }
+            }
+        });
+    }
+
     private function loadPluginRoutes(array $plugin): void
     {
         $routesDecl = $plugin['routes'] ?? null;
@@ -96,29 +177,43 @@ class PluginServiceProvider extends ServiceProvider
             return;
         }
 
-        $prefix = $slug;
-        Route::middleware(['web', 'auth', 'role:admin|infoprodutor'])
-            ->prefix($prefix)
+        $middleware = ['web', 'auth', 'role:admin|infoprodutor'];
+        $extra = $plugin['middleware'] ?? null;
+        if (is_array($extra)) {
+            foreach ($extra as $mw) {
+                if (is_string($mw) && in_array($mw, self::ALLOWED_MIDDLEWARE, true)) {
+                    $middleware[] = $mw;
+                }
+            }
+        }
+
+        Route::middleware(array_values(array_unique($middleware)))
+            ->prefix($slug)
             ->group($routesFile);
     }
 
-    /**
-     * Rotas públicas (ex.: webhooks de entrada) — sem auth; CSRF exceto em bootstrap/app.php.
-     */
     private function loadPluginPublicRoutes(array $plugin): void
     {
-        $decl = $plugin['public_routes'] ?? null;
-        if (! is_string($decl) || $decl === '') {
-            return;
-        }
-        $pluginPath = $plugin['path'];
-        $routesFile = $pluginPath.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $decl);
-        if (! is_file($routesFile)) {
-            return;
-        }
+        PluginPublicRouteRegistrar::register($plugin);
+    }
 
-        Route::middleware(['web', 'throttle:120,1'])
-            ->prefix('webhooks/inbound')
-            ->group($routesFile);
+    private function loadPluginApiRoutes(array $plugin): void
+    {
+        PluginApiRouteRegistrar::register($plugin);
+    }
+
+    private function loadPluginViews(array $plugin): void
+    {
+        $viewsPath = $plugin['path'].DIRECTORY_SEPARATOR.'views';
+        if (! is_dir($viewsPath)) {
+            return;
+        }
+        $slug = preg_replace('/[^a-z0-9_\-]/', '_', (string) ($plugin['slug'] ?? 'plugin'));
+        $this->loadViewsFrom($viewsPath, 'plugin.'.$slug);
+    }
+
+    private function loadPluginMiddleware(array $plugin): void
+    {
+        // Middleware extra já aplicado em loadPluginRoutes via manifest.middleware.
     }
 }

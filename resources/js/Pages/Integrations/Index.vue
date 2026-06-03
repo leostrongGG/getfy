@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, defineAsyncComponent, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { router, usePage } from '@inertiajs/vue3';
 import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import Button from '@/components/ui/Button.vue';
@@ -70,22 +70,14 @@ const props = defineProps({
     conversion_pixel_integrations: { type: Array, default: () => [] },
 });
 
+import { usePluginComponentResolver } from '@/composables/usePluginComponentResolver';
+
 const pluginPagesGlob = import.meta.glob('../../PluginPages/**/*.vue');
-const pluginComponentCache = new Map();
-function resolvePluginComponent(componentName) {
-    if (!componentName || typeof componentName !== 'string') return null;
-    if (pluginComponentCache.has(componentName)) return pluginComponentCache.get(componentName);
-    const rel = componentName.startsWith('Plugin/') ? componentName.slice(7) : componentName;
-    const path = `../../PluginPages/${rel}.vue`;
-    const loader = pluginPagesGlob[path];
-    if (!loader) {
-        pluginComponentCache.set(componentName, null);
-        return null;
-    }
-    const asyncComp = defineAsyncComponent(loader);
-    pluginComponentCache.set(componentName, asyncComp);
-    return asyncComp;
-}
+const pageIntegrations = usePage();
+const { resolve: resolvePluginComponent } = usePluginComponentResolver(
+    computed(() => pageIntegrations.props.plugin_ui),
+    pluginPagesGlob,
+);
 
 const APPS = computed(() =>
     [
@@ -131,6 +123,7 @@ const APPS = computed(() =>
         ...((props.plugin_apps || []).map((p) => ({
             id: `plugin:${p.id}`,
             plugin: true,
+            plugin_slot: p,
             plugin_component: p.component,
             name: p.name,
             description: p.description,
@@ -148,7 +141,7 @@ const spedySidebarOpen = ref(false);
 const cademiSidebarOpen = ref(false);
 const conversionPixelsSidebarOpen = ref(false);
 const pluginSidebarOpen = ref(false);
-const selectedPluginComponentName = ref(null);
+const selectedPluginSlot = ref(null);
 const selectedPluginAppName = ref(null);
 
 function openGatewaySidebar(slug) {
@@ -202,14 +195,14 @@ function closeConversionPixelsSidebar() {
 }
 
 function openPluginSidebar(app) {
-    selectedPluginComponentName.value = app?.plugin_component || null;
+    selectedPluginSlot.value = app?.plugin_slot || (app?.plugin_component ? { component: app.plugin_component, ui_mode: 'legacy' } : null);
     selectedPluginAppName.value = app?.name || 'Integração';
     pluginSidebarOpen.value = true;
 }
 
 function closePluginSidebar() {
     pluginSidebarOpen.value = false;
-    selectedPluginComponentName.value = null;
+    selectedPluginSlot.value = null;
     selectedPluginAppName.value = null;
 }
 
@@ -466,8 +459,8 @@ watch(() => page.url, () => syncGatewayFromQuery());
                     </div>
                     <div class="flex-1 overflow-y-auto p-4">
                         <component
-                            v-if="selectedPluginComponentName && resolvePluginComponent(selectedPluginComponentName)"
-                            :is="resolvePluginComponent(selectedPluginComponentName)"
+                            v-if="selectedPluginSlot && resolvePluginComponent(selectedPluginSlot)"
+                            :is="resolvePluginComponent(selectedPluginSlot)"
                             @saved="router.reload()"
                             @close="closePluginSidebar"
                         />

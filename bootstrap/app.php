@@ -60,6 +60,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'checkout.reuse-pix' => \App\Http\Middleware\ReusePendingPixCheckout::class,
             'partner.product' => \App\Http\Middleware\EnsurePartnerProductAccess::class,
             'partner.panel' => \App\Http\Middleware\EnsurePartnerPanel::class,
+            'storefront.tenant' => \App\Http\Middleware\ResolveStorefrontTenant::class,
+            'plugin.api.signature' => \App\Http\Middleware\VerifyPluginApiSignature::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

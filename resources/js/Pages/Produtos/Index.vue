@@ -21,7 +21,7 @@ const props = defineProps({
     productTypes: { type: Array, default: () => [] },
     billingTypes: { type: Array, default: () => [] },
     exchange_rates: { type: Object, default: () => ({ brl_eur: 0.16, brl_usd: 0.18 }) },
-    plugin_card_actions: { type: Object, default: () => ({}) },
+    plugin_card_actions: { type: [Object, Array], default: () => [] },
     plugin_form_sections: { type: Array, default: () => [] },
 });
 
@@ -89,7 +89,11 @@ function confirmDestroy() {
 }
 
 function pluginActions(productId) {
-    return props.plugin_card_actions?.[productId] ?? [];
+    const raw = props.plugin_card_actions;
+    if (Array.isArray(raw)) {
+        return raw.filter((a) => !a?.product_id || String(a.product_id) === String(productId));
+    }
+    return raw?.[productId] ?? raw?.[String(productId)] ?? [];
 }
 </script>
 

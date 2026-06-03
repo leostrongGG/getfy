@@ -43,6 +43,7 @@ class WebhookPayloadBuilderTest extends TestCase
             'amount' => 149.90,
             'currency' => 'BRL',
             'email' => 'buyer@test.com',
+            'cpf' => '12345678900',
             'gateway' => 'cajupay',
             'metadata' => [
                 'checkout_payment_method' => 'pix',
@@ -56,7 +57,18 @@ class WebhookPayloadBuilderTest extends TestCase
         $this->assertSame('Oferta Black Friday', $payload['offer']['name']);
         $this->assertSame('pix', $payload['payment']['method']);
         $this->assertSame('meta', $payload['tracking']['utm_source']);
-        $this->assertSame('buyer@test.com', $payload['customer']['email']);
+        $this->assertArrayNotHasKey('email', $payload['customer']);
+        $this->assertArrayNotHasKey('cpf', $payload['customer']);
+        $this->assertArrayNotHasKey('phone', $payload['customer']);
+        $this->assertArrayNotHasKey('name', $payload['customer']);
+        $this->assertSame(
+            hash('sha256', 'buyer@test.com'),
+            $payload['customer']['email_hash']
+        );
+        $this->assertSame(
+            hash('sha256', '12345678900'),
+            $payload['customer']['cpf_hash']
+        );
         $this->assertArrayNotHasKey('order_bumps', $payload);
         $this->assertArrayNotHasKey('products', $payload);
         $this->assertArrayNotHasKey('email', $payload['order']);
@@ -216,6 +228,103 @@ class WebhookPayloadBuilderTest extends TestCase
         $this->assertSame($periodEnd->copy()->addDays(2)->toDateString(), $payload['subscription']['access_until']);
         $this->assertArrayNotHasKey('products', $payload);
         $this->assertSame('Mensal', $payload['subscription_plan']['name']);
+    }
+
+    public function test_denied_keys_never_appear_in_payload(): void
+    {
+        $product = $this->createTestProduct();
+
+        $order = Order::create([
+            'tenant_id' => $product->tenant_id,
+            'product_id' => $product->id,
+            'status' => 'completed',
+            'amount' => 50,
+            'currency' => 'BRL',
+            'email' => 'buyer@test.com',
+            'customer_ip' => '203.0.113.50',
+            'metadata' => [
+                'customer_ip' => '203.0.113.50',
+                'server_ip' => '10.0.0.1',
+                'utm_source' => 'ads',
+            ],
+        ]);
+
+        $payload = WebhookPayloadBuilder::forOrderEvent($order);
+        $encoded = json_encode($payload);
+
+        $this->assertStringNotContainsString('203.0.113.50', (string) $encoded);
+        $this->assertStringNotContainsString('10.0.0.1', (string) $encoded);
+        $this->assertArrayNotHasKey('customer_ip', $payload);
+        $this->assertSame('ads', $payload['tracking']['utm_source']);
+    }
+
+    public function test_pix_webhook_omits_huge_qrcode_image(): void
+    {
+        $product = $this->createTestProduct();
+        $order = Order::create([
+            'tenant_id' => $product->tenant_id,
+            'product_id' => $product->id,
+            'status' => 'pending',
+            'amount' => 10,
+            'currency' => 'BRL',
+            'email' => 'buyer@test.com',
+        ]);
+
+        $payload = WebhookPayloadBuilder::forOrderEvent($order, [
+            'pix' => [
+                'qrcode' => 'data:image/png;base64,'.str_repeat('A', 3000),
+                'copy_paste' => '00020126580014br.gov.bcb.pix',
+                'transaction_id' => 'tx-1',
+            ],
+        ]);
+
+        $this->assertArrayNotHasKey('qrcode', $payload['pix']);
+        $this->assertSame('00020126580014br.gov.bcb.pix', $payload['pix']['copy_paste']);
+    }
+
+    public function test_access_extra_strips_password(): void
+    {
+        $product = $this->createTestProduct();
+        $order = Order::create([
+            'tenant_id' => $product->tenant_id,
+            'product_id' => $product->id,
+            'status' => 'completed',
+            'amount' => 10,
+            'currency' => 'BRL',
+            'email' => 'buyer@test.com',
+        ]);
+
+        $payload = WebhookPayloadBuilder::forOrderEvent($order, [
+            'access' => [
+                'type' => 'member_area',
+                'link' => 'https://example.com/m/slug',
+                'password' => 'secret123',
+            ],
+        ]);
+
+        $this->assertSame('member_area', $payload['access']['type']);
+        $this->assertArrayNotHasKey('password', $payload['access']);
+    }
+
+    public function test_meta_compatible_hashes_for_facebook_style_integrations(): void
+    {
+        $product = $this->createTestProduct();
+        $order = Order::create([
+            'tenant_id' => $product->tenant_id,
+            'product_id' => $product->id,
+            'status' => 'completed',
+            'amount' => 10,
+            'currency' => 'BRL',
+            'email' => 'Buyer@Email.COM',
+            'phone' => '(11) 98888-7777',
+            'cpf' => '123.456.789-00',
+        ]);
+
+        $payload = WebhookPayloadBuilder::forOrderEvent($order);
+
+        $this->assertSame(hash('sha256', 'buyer@email.com'), $payload['customer']['email_hash']);
+        $this->assertSame(hash('sha256', '5511988887777'), $payload['customer']['phone_hash']);
+        $this->assertSame(hash('sha256', '12345678900'), $payload['customer']['cpf_hash']);
     }
 
     public function test_dispatch_webhook_job_sends_product_name(): void

@@ -31,8 +31,12 @@ use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use App\Models\PayoutRequest;
+use App\Models\Product;
 use App\Plugins\PluginRegistry;
+use App\Services\MemberAreaResolver;
+use App\Support\SocialPreviewOpenGraph;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\View;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -91,6 +95,7 @@ class AppServiceProvider extends ServiceProvider
         $this->fallbackInvalidQueueConnectionToSync();
         $this->bootCloudFolder();
         $this->bootRouteBindings();
+        $this->bootSocialPreviewOpenGraph();
         if (DockerSetupState::isDocker() && class_exists(\Illuminate\Support\Facades\Vite::class)) {
             \Illuminate\Support\Facades\Vite::useHotFile(storage_path('framework/vite.hot'));
         }
@@ -362,6 +367,41 @@ class AppServiceProvider extends ServiceProvider
         if (! array_key_exists($default, $connections)) {
             config(['queue.default' => 'sync']);
         }
+    }
+
+    private function bootSocialPreviewOpenGraph(): void
+    {
+        View::composer('app', function ($view): void {
+            $data = $view->getData();
+            if (! empty($data['openGraph'])) {
+                return;
+            }
+
+            $request = request();
+            $path = $request->path();
+            $isCheckout = str_starts_with($path, 'c/')
+                || str_starts_with($path, 'checkout')
+                || str_starts_with($path, 'api-checkout');
+            if ($isCheckout) {
+                return;
+            }
+
+            $isMemberArea = str_starts_with($path, 'm/') || $request->attributes->get('member_area_slug');
+            if ($isMemberArea) {
+                $product = $request->route('product') ?? $request->attributes->get('member_area_product');
+                if (! $product instanceof Product) {
+                    $resolved = app(MemberAreaResolver::class)->resolve($request);
+                    $product = $resolved['product'] ?? null;
+                }
+                if ($product instanceof Product && $product->type === Product::TYPE_AREA_MEMBROS) {
+                    $view->with('openGraph', SocialPreviewOpenGraph::forMemberArea($product, $request));
+                }
+
+                return;
+            }
+
+            $view->with('openGraph', SocialPreviewOpenGraph::forPlatform($request));
+        });
     }
 
     private function bootRouteBindings(): void

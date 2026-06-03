@@ -420,8 +420,10 @@ class RefundService
             ];
         }
 
+        $previousStatus = (string) $order->status;
         $order->update(['status' => 'refunded']);
         event(new OrderRefunded($order));
+        event(new \App\Events\OrderStatusChanged($order->fresh(), $previousStatus, 'refunded'));
         $refundRequest->update([
             'status' => RefundRequest::STATUS_COMPLETED,
             'completed_at' => now(),

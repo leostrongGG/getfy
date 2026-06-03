@@ -6,6 +6,7 @@ use App\Support\BrandFavicon;
 use App\Models\MemberNotification;
 use App\Models\MemberPushSubscription;
 use App\Models\PanelNotification;
+use App\Plugins\PluginExtensionRegistry;
 use App\Plugins\PluginRegistry;
 use App\Services\RefundService;
 use App\Services\SalesAchievementsService;
@@ -150,6 +151,12 @@ class HandleInertiaRequests extends Middleware
             'appSettings' => $appSettings,
             'public_branding' => $publicBranding,
             'settings_plugin_tabs' => $settingsPluginTabs,
+            'plugin_ui' => ($user && $user->canAccessPanel()) || $isCheckout || $isMemberArea
+                ? PluginExtensionRegistry::inertiaPayload()
+                : ['plugins' => []],
+            'plugin_member_panels' => $isMemberArea
+                ? PluginExtensionRegistry::getMemberAreaPanels()
+                : [],
             'pluginNavItems' => $pluginNavItems,
             'plugins' => $plugins,
             'achievementsProgress' => $achievementsProgress,

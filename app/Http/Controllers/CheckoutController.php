@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Events\BoletoGenerated;
+use App\Events\CheckoutBeforeProcess;
+use App\Events\CheckoutPageLoading;
 use App\Events\OrderCompleted;
 use App\Events\OrderPending;
 use App\Events\PixGenerated;
@@ -440,6 +442,16 @@ class CheckoutController extends Controller
 
         $payload['checkout_security'] = app(CheckoutAbuseGuard::class)->securityPropsForRequest($request, $product);
 
+        $checkoutEventData = new \ArrayObject([
+            'product' => $payload['product'] ?? [],
+            'config' => $config,
+            'available_payment_methods' => $payload['available_payment_methods'] ?? [],
+        ]);
+        event(new CheckoutPageLoading($product, $checkoutEventData));
+        foreach ($checkoutEventData->getArrayCopy() as $key => $value) {
+            $payload[$key] = $value;
+        }
+
         return Inertia::render('Checkout/Show', $payload)
             ->withViewData([
                 'openGraph' => \App\Support\CheckoutOpenGraph::forProduct($product, $config, $request),
@@ -607,6 +619,16 @@ class CheckoutController extends Controller
         }
         $validated = $request->validate($rules);
         $validated = $this->applyPagarmeCompanyAddressToValidated($validated, $product, $paymentService);
+
+        $beforeProcess = new CheckoutBeforeProcess($product, $validated);
+        event($beforeProcess);
+        if ($beforeProcess->abort !== null && $beforeProcess->abort !== '') {
+            if ($request->expectsJson()) {
+                return response()->json(['message' => $beforeProcess->abort], 422);
+            }
+
+            return redirect()->back()->withErrors(['checkout' => $beforeProcess->abort]);
+        }
 
         app(CheckoutAbuseGuard::class)->assertCanCreateCheckout($request, $product);
 

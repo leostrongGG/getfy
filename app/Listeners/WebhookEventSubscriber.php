@@ -144,9 +144,9 @@ class WebhookEventSubscriber
         }
 
         if ($event instanceof AccessDeliveryReady) {
-            return WebhookPayloadBuilder::forOrderEvent($event->order, [
+            return WebhookPayloadBuilder::forOrderEvent($event->order, WebhookPayloadBuilder::sanitizeExtras([
                 'access' => is_array($event->access) ? $event->access : [],
-            ]);
+            ]));
         }
 
         if ($event instanceof CartAbandoned) {
@@ -299,8 +299,12 @@ class WebhookEventSubscriber
 
     private function serializeValue(mixed $value): mixed
     {
+        if ($value instanceof Order) {
+            return WebhookPayloadBuilder::forOrderEvent($value);
+        }
+
         if ($value instanceof Model) {
-            return $value->toArray();
+            return WebhookPayloadBuilder::sanitizePayload($value->toArray());
         }
 
         if ($value instanceof \ArrayObject) {

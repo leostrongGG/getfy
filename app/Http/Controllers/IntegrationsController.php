@@ -13,6 +13,7 @@ use App\Models\SpedyIntegration;
 use App\Models\UtmifyIntegration;
 use App\Models\ApiApplication;
 use App\Models\Webhook;
+use App\Plugins\PluginExtensionRegistry;
 use App\Plugins\PluginRegistry;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -51,6 +52,25 @@ class IntegrationsController extends Controller
                 }
             } catch (\Throwable) {
                 // Badge é "best-effort": não deve quebrar a página de integrações.
+            }
+        }
+
+        foreach ($pluginApps as $idx => $app) {
+            $slug = (string) ($app['plugin_slug'] ?? '');
+            if ($slug === '') {
+                continue;
+            }
+            $ext = PluginExtensionRegistry::getBootstrapExtension($slug);
+            $resolver = $ext['integration_status_resolver'] ?? null;
+            if (! is_callable($resolver)) {
+                continue;
+            }
+            try {
+                if ($resolver($tenantId)) {
+                    $pluginApps[$idx]['status'] = 'active';
+                }
+            } catch (\Throwable) {
+                // Contrato genérico em paralelo ao legado; falhas não quebram a página.
             }
         }
 

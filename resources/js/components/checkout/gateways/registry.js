@@ -74,9 +74,35 @@ export const gatewayMethodComponents = {
  * @param {{ id: string, gateway_slug?: string }} method
  * @returns {import('vue').Component}
  */
+/** @type {Record<string, Record<string, import('vue').Component>>} */
+const pluginGatewayOverrides = {};
+
+/**
+ * Registra componente de checkout de um plugin (bundle com frontend.exports.checkout).
+ *
+ * @param {string} gatewaySlug
+ * @param {string} methodId
+ * @param {import('vue').Component} component
+ */
+export function registerGatewayMethod(gatewaySlug, methodId, component) {
+    const slug = (gatewaySlug || '').toLowerCase();
+    const method = methodId || 'pix';
+    if (!slug || !component) {
+        return;
+    }
+    if (!pluginGatewayOverrides[slug]) {
+        pluginGatewayOverrides[slug] = {};
+    }
+    pluginGatewayOverrides[slug][method] = component;
+}
+
 export function getMethodCardComponent(method) {
     const slug = (method?.gateway_slug || '').toLowerCase();
     const methodId = method?.id || 'pix';
+    const pluginComponent = pluginGatewayOverrides[slug]?.[methodId];
+    if (pluginComponent) {
+        return pluginComponent;
+    }
     const gateway = gatewayMethodComponents[slug];
     const component = gateway?.[methodId];
     return component || DefaultMethodCard;

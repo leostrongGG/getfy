@@ -34,6 +34,9 @@ const props = defineProps({
     filters: { type: Object, default: () => ({}) },
     products: { type: Array, default: () => [] },
     offers: { type: Array, default: () => [] },
+    plugin_fulfillment_providers: { type: Array, default: () => [] },
+    plugin_vendas_row_actions: { type: Array, default: () => [] },
+    plugin_order_detail_panels: { type: Array, default: () => [] },
 });
 
 const vendasList = computed(() => props.vendas?.data ?? props.vendas ?? []);
@@ -293,6 +296,12 @@ async function toggleMenu(id, event) {
     menuAnchorEl.value = event?.currentTarget ?? null;
     await nextTick();
     await updateMenuPosition();
+}
+
+function pluginActionHref(action, venda) {
+    const raw = action.href ?? action.route ?? '';
+    const base = String(raw).startsWith('/') ? String(raw) : `/${action.plugin_slug}/${String(raw).replace(/^\//, '')}`;
+    return base.replace(':order_id', String(venda?.id ?? ''));
 }
 
 function closeMenu() {
@@ -1081,6 +1090,26 @@ function openProofExport() {
                     <Mail class="h-4 w-4 shrink-0" />
                     {{ resendingId === openMenuId ? 'Enviando...' : 'Reenviar e-mail de compra' }}
                 </button>
+                <template v-for="fp in plugin_fulfillment_providers" :key="`fp-${fp.plugin_slug}-${fp.id}`">
+                    <a
+                        v-if="(fp.href || fp.route) && menuVenda.status === 'completed'"
+                        :href="pluginActionHref(fp, menuVenda)"
+                        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        @click="closeMenu"
+                    >
+                        {{ fp.label ?? 'Enviar' }}
+                    </a>
+                </template>
+                <template v-for="act in plugin_vendas_row_actions" :key="`act-${act.plugin_slug}-${act.id}`">
+                    <a
+                        v-if="act.href || act.route"
+                        :href="pluginActionHref(act, menuVenda)"
+                        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        @click="closeMenu"
+                    >
+                        {{ act.label ?? 'Ação' }}
+                    </a>
+                </template>
             </div>
             <div
                 v-if="refundModalOpen && refundTarget"

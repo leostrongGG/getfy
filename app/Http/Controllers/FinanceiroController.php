@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Plugins\PluginExtensionRegistry;
 use App\Models\CommissionEntry;
 use App\Models\GatewayCredential;
 use App\Models\WalletTransaction;
@@ -82,6 +83,7 @@ class FinanceiroController extends Controller
                 'producer_ledger_available' => (float) ($balances['totals']['available'] ?? 0),
             ],
             'partner_payouts' => $this->partnerPayouts->listForTenant($tenantId),
+            'plugin_financeiro_tabs' => PluginExtensionRegistry::getFinanceiroTabs(),
         ]);
     }
 

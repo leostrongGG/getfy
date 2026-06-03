@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Events\OrderCompleted;
+use App\Events\OrderStatusChanged;
 use App\Events\SubscriptionRenewed;
+use App\Plugins\PluginExtensionRegistry;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\ProductAffiliate;
@@ -388,6 +390,9 @@ class VendasController extends Controller
         return Inertia::render('Vendas/Index', [
             'vendas' => $vendas,
             'stats' => $stats,
+            'plugin_fulfillment_providers' => PluginExtensionRegistry::getOrderFulfillmentProviders(),
+            'plugin_vendas_row_actions' => PluginExtensionRegistry::getVendasRowActions(),
+            'plugin_order_detail_panels' => PluginExtensionRegistry::getOrderDetailPanels(),
             'status_filter' => $statusFilter,
             'filters' => [
                 'q' => $this->normalizeString($request->query('q')),
@@ -534,7 +539,9 @@ class VendasController extends Controller
 
         $order->load(['product', 'productOffer', 'subscriptionPlan', 'orderItems.product']);
 
+        $previousStatus = (string) $order->status;
         $order->update(['status' => 'completed', 'approved_manually' => true]);
+        event(new OrderStatusChanged($order->fresh(), $previousStatus, 'completed'));
         $order->syncUtmMetadataFromCheckoutSession();
 
         try {

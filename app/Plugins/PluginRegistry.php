@@ -235,6 +235,21 @@ class PluginRegistry
                     'settings_tab' => $manifest['settings_tab'] ?? null,
                     'integration_app' => $manifest['integration_app'] ?? null,
                     'product_panel' => $manifest['product_panel'] ?? null,
+                    'frontend' => $manifest['frontend'] ?? null,
+                    'checkout_builder_templates' => $manifest['checkout_builder_templates'] ?? null,
+                    'product_card_actions' => $manifest['product_card_actions'] ?? null,
+                    'product_form_sections' => $manifest['product_form_sections'] ?? null,
+                    'dashboard_widgets' => $manifest['dashboard_widgets'] ?? null,
+                    'member_area_panels' => $manifest['member_area_panels'] ?? null,
+                    'order_fulfillment_providers' => $manifest['order_fulfillment_providers'] ?? null,
+                    'vendas_row_actions' => $manifest['vendas_row_actions'] ?? null,
+                    'order_detail_panels' => $manifest['order_detail_panels'] ?? null,
+                    'financeiro_tabs' => $manifest['financeiro_tabs'] ?? null,
+                    'api_routes' => $manifest['api_routes'] ?? null,
+                    'commerce_scopes' => $manifest['commerce_scopes'] ?? null,
+                    'commands' => $manifest['commands'] ?? null,
+                    'schedule' => $manifest['schedule'] ?? null,
+                    'middleware' => $manifest['middleware'] ?? null,
                 ];
 
                 // Uma instalação persistente (ex.: ZIP) no mesmo slug sobrescreve a pasta bundled.
@@ -306,14 +321,14 @@ class PluginRegistry
             if ($id === '' || $label === '' || $component === '') {
                 continue;
             }
-            if (! str_starts_with($component, 'Plugin/')) {
+            if (! self::isValidUiComponentDeclaration($plugin, $component, 'settings')) {
                 continue;
             }
-            $items[] = [
+            $items[] = PluginExtensionRegistry::enrichUiSlotItem($plugin, [
                 'id' => $id,
                 'label' => $label,
                 'component' => $component,
-            ];
+            ], 'settings');
         }
 
         return $items;
@@ -338,7 +353,7 @@ class PluginRegistry
             if ($id === '' || $name === '' || $component === '') {
                 continue;
             }
-            if (! str_starts_with($component, 'Plugin/')) {
+            if (! self::isValidUiComponentDeclaration($plugin, $component, 'integrations')) {
                 continue;
             }
             $description = isset($app['description']) ? trim((string) $app['description']) : '';
@@ -352,13 +367,13 @@ class PluginRegistry
                     $image = '';
                 }
             }
-            $items[] = [
+            $items[] = PluginExtensionRegistry::enrichUiSlotItem($plugin, [
                 'id' => $id,
                 'name' => $name,
                 'description' => $description !== '' ? $description : null,
                 'image' => $image !== '' && $image !== null ? $image : null,
                 'component' => $component,
-            ];
+            ], 'integrations');
         }
 
         return $items;
@@ -383,17 +398,197 @@ class PluginRegistry
             if ($id === '' || $label === '' || $component === '') {
                 continue;
             }
-            if (! str_starts_with($component, 'Plugin/')) {
+            if (! self::isValidUiComponentDeclaration($plugin, $component, 'product_panel')) {
                 continue;
             }
-            $items[] = [
+            $items[] = PluginExtensionRegistry::enrichUiSlotItem($plugin, [
                 'id' => $id,
                 'label' => $label,
                 'component' => $component,
-            ];
+            ], 'product_panel');
         }
 
         return $items;
+    }
+
+    /**
+     * UI legado (Plugin/...) ou runtime (frontend.exports no manifest + dist).
+     */
+    private static function isValidUiComponentDeclaration(array $plugin, string $component, string $slot): bool
+    {
+        if ($component === '') {
+            return false;
+        }
+        if (str_starts_with($component, 'Plugin/')) {
+            return true;
+        }
+        if (PluginExtensionRegistry::hasRuntimeFrontend($plugin)) {
+            $export = PluginExtensionRegistry::resolveExportForSlot($plugin, $slot);
+
+            return $export !== null && $export !== '';
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public static function getConfig(string $slug, array $default = []): array
+    {
+        if (! self::tableExists()) {
+            return $default;
+        }
+        $record = PluginModel::find($slug);
+        if (! $record) {
+            return $default;
+        }
+        $config = $record->config;
+        if (! is_array($config)) {
+            return $default;
+        }
+
+        return array_replace($default, $config);
+    }
+
+    public static function setConfig(string $slug, array $config): bool
+    {
+        if (! self::tableExists()) {
+            return false;
+        }
+        $record = PluginModel::find($slug);
+        if (! $record) {
+            return false;
+        }
+        $record->update(['config' => $config]);
+
+        return true;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public static function validatePluginPackage(string $pluginPath): array
+    {
+        $errors = [];
+        $manifest = self::readManifest($pluginPath);
+        if ($manifest === null) {
+            return ['plugin.json ausente ou inválido.'];
+        }
+        $slug = (string) ($manifest['slug'] ?? basename($pluginPath));
+        if ($slug === '') {
+            $errors[] = 'slug obrigatório no manifest.';
+        }
+        $bootstrap = $pluginPath.DIRECTORY_SEPARATOR.'bootstrap.php';
+        if (is_file($bootstrap)) {
+            $syntax = self::checkPhpSyntax($bootstrap);
+            if ($syntax !== null) {
+                $errors[] = 'bootstrap.php: '.$syntax;
+            }
+        }
+        $plugin = array_merge($manifest, ['slug' => $slug, 'path' => $pluginPath]);
+        $errors = array_merge($errors, PluginExtensionRegistry::validateFrontend($plugin));
+        $errors = array_merge($errors, PluginPublicRouteRegistrar::validatePublicRoutePrefixes());
+        $errors = array_merge($errors, PluginApiRouteRegistrar::validateApiRoutePrefixes());
+        $errors = array_merge($errors, self::validateDistSize($pluginPath));
+        $errors = array_merge($errors, self::validateApiRoutesFile($pluginPath, $manifest));
+        $errors = array_merge($errors, self::validateCommerceScopes($manifest));
+        $routes = $manifest['routes'] ?? null;
+        if (is_string($routes) && $routes !== '') {
+            $routesFile = $pluginPath.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $routes);
+            if (! is_file($routesFile)) {
+                $errors[] = "Arquivo de rotas não encontrado: {$routes}";
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    /**
+     * @param  array<string, mixed>  $manifest
+     * @return array<int, string>
+     */
+    private static function validateApiRoutesFile(string $pluginPath, array $manifest): array
+    {
+        $decl = $manifest['api_routes'] ?? null;
+        if ($decl === null || $decl === '' || $decl === []) {
+            return [];
+        }
+        $file = is_array($decl) ? ($decl['file'] ?? $decl['path'] ?? 'routes-api.php') : $decl;
+        if (! is_string($file) || $file === '') {
+            return ['api_routes: arquivo inválido.'];
+        }
+        $routesFile = $pluginPath.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $file);
+        if (! is_file($routesFile)) {
+            return ["api_routes: arquivo não encontrado: {$file}"];
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $manifest
+     * @return array<int, string>
+     */
+    private static function validateCommerceScopes(array $manifest): array
+    {
+        $scopes = $manifest['commerce_scopes'] ?? null;
+        if ($scopes === null) {
+            return [];
+        }
+        if (! is_array($scopes)) {
+            return ['commerce_scopes deve ser um array.'];
+        }
+        $allowed = ['catalog:read', 'cart:write', 'checkout:start', 'orders:read'];
+        foreach ($scopes as $scope) {
+            if (! is_string($scope) || ! in_array($scope, $allowed, true)) {
+                return ['commerce_scopes contém valor inválido: '.(string) $scope];
+            }
+        }
+
+        return [];
+    }
+
+    private static function validateDistSize(string $pluginPath): array
+    {
+        $dist = $pluginPath.DIRECTORY_SEPARATOR.'dist';
+        if (! is_dir($dist)) {
+            return [];
+        }
+        $maxBytes = (int) config('plugins.max_dist_bytes', 15 * 1024 * 1024);
+        $total = 0;
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dist, \FilesystemIterator::SKIP_DOTS)) as $file) {
+            if ($file->isFile()) {
+                $total += $file->getSize();
+            }
+        }
+        if ($total > $maxBytes) {
+            return ['dist/ excede tamanho máximo ('.round($total / 1024 / 1024, 1).' MB).'];
+        }
+
+        return [];
+    }
+
+    private static function checkPhpSyntax(string $file): ?string
+    {
+        $phpBin = (defined('PHP_BINARY') && is_string(PHP_BINARY) && PHP_BINARY !== '')
+            ? PHP_BINARY
+            : 'php';
+        $output = [];
+        $code = 0;
+        @exec($phpBin.' -l '.escapeshellarg($file).' 2>&1', $output, $code);
+        if ($code === 0) {
+            return null;
+        }
+        $msg = trim(implode(' ', $output));
+        if ($msg !== '' && (str_contains(strtolower($msg), 'não é reconhecido') || str_contains(strtolower($msg), 'not recognized'))) {
+            return null;
+        }
+
+        return $msg ?: 'erro de sintaxe PHP';
     }
 
     /**

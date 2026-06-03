@@ -1,6 +1,14 @@
 <script setup>
 import { ref } from 'vue';
-import { Link } from '@inertiajs/vue3';
+import { Link, usePage } from '@inertiajs/vue3';
+import { usePluginComponentResolver } from '@/composables/usePluginComponentResolver';
+
+const pluginPagesGlob = import.meta.glob('../../PluginPages/**/*.vue');
+const inertiaPage = usePage();
+const { resolve: resolvePluginPanel } = usePluginComponentResolver(
+    () => inertiaPage.props.plugin_ui,
+    pluginPagesGlob,
+);
 import { ChevronLeft, ChevronRight, Lock, LockOpen } from 'lucide-vue-next';
 import MemberAreaAppLayout from '@/Layouts/MemberAreaAppLayout.vue';
 import Button from '@/components/ui/Button.vue';
@@ -50,7 +58,10 @@ const props = defineProps({
     can_issue_certificate: { type: Boolean, default: false },
     base_url: { type: String, default: '' },
     slug: { type: String, required: true },
+    plugin_member_panels: { type: Array, default: () => [] },
 });
+
+const memberPluginPanels = () => inertiaPage.props.plugin_member_panels ?? props.plugin_member_panels ?? [];
 
 const hero = props.config?.hero ?? {};
 const heroDesktopBg = hero.image_url_desktop || hero.image_url || null;
@@ -318,6 +329,15 @@ function productSectionUnlocked(mod) {
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>
                 Emitir certificado
             </Link>
+        </section>
+
+        <section
+            v-for="panel in memberPluginPanels()"
+            :key="`plugin-panel-${panel.id}`"
+            class="mt-8 rounded-xl border border-zinc-700/50 bg-zinc-900/40 p-4"
+        >
+            <h2 v-if="panel.label" class="mb-3 text-lg font-semibold">{{ panel.label }}</h2>
+            <component :is="resolvePluginPanel(panel)" v-if="resolvePluginPanel(panel)" />
         </section>
         </div>
     </div>

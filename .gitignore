@@ -30,4 +30,7 @@ Thumbs.db
 /Docs Gateways
 docs
 Docs Gateways
-/plugins
+/plugins/*
+!/plugins/getfy-plugin-starter/
+!/plugins/getfy-vitrine-demo/
+!/plugins/mercado-envios-stub/

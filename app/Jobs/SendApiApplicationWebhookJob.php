@@ -2,8 +2,8 @@
 
 namespace App\Jobs;
 
-use App\Models\ApiApplication;
 use App\Models\Order;
+use App\Support\WebhookPayloadBuilder;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -37,23 +37,18 @@ class SendApiApplicationWebhookJob implements ShouldQueue
             return;
         }
 
-        $payload = [
+        $payload = WebhookPayloadBuilder::forOrderEvent($order);
+        $body = json_encode([
             'event' => $this->eventName,
             'order_id' => $order->id,
-            'amount' => (float) $order->amount,
-            'status' => $order->status,
-            'email' => $order->email,
-            'metadata' => $order->metadata ?? [],
-            'created_at' => $order->created_at?->toIso8601String(),
-            'updated_at' => $order->updated_at?->toIso8601String(),
-        ];
+            'payload' => $payload,
+            'timestamp' => now()->toIso8601String(),
+        ], JSON_UNESCAPED_UNICODE);
 
-        $body = json_encode($payload);
         $headers = ['Content-Type' => 'application/json'];
 
         if ($app->webhook_secret !== null && $app->webhook_secret !== '') {
-            $signature = hash_hmac('sha256', $body, $app->webhook_secret);
-            $headers['X-Getfy-Signature'] = $signature;
+            $headers['X-Getfy-Signature'] = hash_hmac('sha256', $body, $app->webhook_secret);
         }
 
         try {

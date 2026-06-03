@@ -61,6 +61,7 @@ import { createApp as createVueApp, h } from 'vue';
 import { watchEffect } from 'vue';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import { createPinia } from 'pinia';
+import { installPluginUiBridge, resolvePluginPageComponent, getPluginUiPayloadFromDom } from './plugins/pluginUiLoader';
 
 // Sincroniza a meta csrf-token com o token da página atual (evita 419 em gateways e outras requisições axios)
 const CsrfSync = {
@@ -111,7 +112,12 @@ const createFirstAdminPage = import.meta.glob('./Pages/Auth/CreateFirstAdmin.vue
 
 function resolvePluginPage(name) {
     if (!name.startsWith('Plugin/')) return null;
-    const path = `./PluginPages/${name.slice(7).replace(/\//g, '/')}.vue`;
+    const pluginUi = getPluginUiPayloadFromDom();
+    const runtime = resolvePluginPageComponent(name, pluginUi);
+    if (runtime) {
+        return Promise.resolve({ default: runtime });
+    }
+    const path = `./PluginPages/${name.slice(7)}.vue`;
     const loader = pluginPagesGlob[path];
     return loader ? loader() : null;
 }
@@ -137,6 +143,7 @@ createInertiaApp({
         });
         vueApp.use(plugin);
         vueApp.use(createPinia());
+        installPluginUiBridge(vueApp);
         vueApp.mount(el);
     },
     progress: {

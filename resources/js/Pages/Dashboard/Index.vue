@@ -21,6 +21,7 @@ const props = defineProps({
     reembolsos_total: { type: Number, default: 0 },
     quantidade_produtos: { type: Number, default: 0 },
     grafico_vendas: { type: Array, default: () => [] },
+    plugin_dashboard_widgets: { type: Array, default: () => [] },
 });
 
 const valuesVisible = ref(true);
@@ -89,13 +90,27 @@ async function handleSavePeriod(amount) {
                 @clear-period="clearPeriodAdSpend()"
                 @retry="fetchData()"
             />
-            <DashboardClassicView
-                v-else
-                key="classic"
-                v-model:values-visible="valuesVisible"
-                v-bind="props"
-                @open-tracking="openTracking"
-            />
+            <div v-else key="classic" class="w-full min-w-0 max-w-full space-y-6">
+                <DashboardClassicView
+                    v-model:values-visible="valuesVisible"
+                    v-bind="props"
+                    @open-tracking="openTracking"
+                />
+                <div
+                    v-if="(plugin_dashboard_widgets || []).length"
+                    class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+                >
+                    <a
+                        v-for="w in plugin_dashboard_widgets"
+                        :key="w.id"
+                        v-show="w.route"
+                        :href="w.route"
+                        class="panel-card block p-4 text-sm font-medium text-zinc-800 dark:text-zinc-100"
+                    >
+                        {{ w.label || w.id }}
+                    </a>
+                </div>
+            </div>
         </Transition>
     </div>
 </template>

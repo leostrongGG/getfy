@@ -8,8 +8,7 @@ use Illuminate\Http\Response;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
- * Serve assets estáticos de plugins (imagens, etc.) em GET /plugins/{slug}/assets/{path}.
- * Apenas arquivos dentro da pasta assets/ do plugin; sem directory traversal.
+ * Serve assets estáticos de plugins (assets/, dist/) em GET /plugins/{slug}/assets/{path}.
  */
 class PluginAssetController extends Controller
 {
@@ -21,17 +20,26 @@ class PluginAssetController extends Controller
         }
 
         $path = str_replace(['../', '..\\'], '', $path);
-        $path = ltrim($path, '/\\');
+        $path = ltrim(str_replace('\\', '/', $path), '/');
         if ($path === '' || preg_match('/\\.\\./', $path)) {
             abort(404);
         }
 
-        $assetsDir = $pluginDir . DIRECTORY_SEPARATOR . 'assets';
-        $fullPath = $assetsDir . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
-        $realAssets = realpath($assetsDir);
+        $serveFromDist = str_starts_with($path, 'dist/');
+        $baseDir = $serveFromDist
+            ? $pluginDir
+            : $pluginDir.DIRECTORY_SEPARATOR.'assets';
+        $relative = str_replace('/', DIRECTORY_SEPARATOR, $path);
+
+        $fullPath = $baseDir.DIRECTORY_SEPARATOR.$relative;
+        $realBase = realpath($baseDir);
         $realFile = realpath($fullPath);
 
-        if ($realAssets === false || $realFile === false || substr($realFile, 0, strlen($realAssets) + 1) !== $realAssets . DIRECTORY_SEPARATOR) {
+        if ($realBase === false || $realFile === false) {
+            abort(404);
+        }
+        $prefix = $realBase.DIRECTORY_SEPARATOR;
+        if (! str_starts_with($realFile, $prefix)) {
             abort(404);
         }
         if (! is_file($realFile)) {
@@ -45,16 +53,20 @@ class PluginAssetController extends Controller
             'webp' => 'image/webp',
             'svg' => 'image/svg+xml',
             'ico' => 'image/x-icon',
-            'css' => 'text/css',
-            'js' => 'application/javascript',
+            'css' => 'text/css; charset=UTF-8',
+            'js', 'mjs' => 'application/javascript; charset=UTF-8',
+            'json' => 'application/json',
             'woff2' => 'font/woff2',
             'woff' => 'font/woff',
+            'map' => 'application/json',
             default => 'application/octet-stream',
         };
 
+        $maxAge = $serveFromDist ? 31536000 : 86400;
+
         return response()->file($realFile, [
             'Content-Type' => $mime,
-            'Cache-Control' => 'public, max-age=86400',
+            'Cache-Control' => 'public, max-age='.$maxAge,
         ]);
     }
 }

@@ -378,13 +378,14 @@ function truncateUrl(url, max = 40) {
                     <template v-if="!showingForm">
                         <div class="space-y-3 p-4">
                             <p class="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
-                                O corpo inclui <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">products[]</code>,
+                                O corpo inclui <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">order</code>,
                                 <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">product</code>,
                                 <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">offer</code>,
                                 <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">payment</code> e
-                                <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">tracking</code>
-                                (além de <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">order</code> e
-                                <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">customer</code>).
+                                <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">tracking</code>.
+                                Em <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">customer</code> só hashes SHA-256
+                                (<code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">email_hash</code>,
+                                <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">phone_hash</code>, etc.) — compatível com Meta/LGPD; sem e-mail ou CPF em texto claro.
                             </p>
                             <Button
                                 variant="outline"
