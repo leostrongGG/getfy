@@ -32,6 +32,10 @@ class ConversionPixelsResolver
             $productId
         );
 
+        $resolved['gtm'] = Product::normalizeGtmBlock(
+            isset($stored['gtm']) && is_array($stored['gtm']) ? $stored['gtm'] : []
+        );
+
         return $resolved;
     }
 
@@ -62,6 +66,10 @@ class ConversionPixelsResolver
             is_array($stored['custom_script'] ?? null) ? $stored['custom_script'] : [],
             $stored,
             $tenantId
+        );
+
+        $resolved['gtm'] = Product::normalizeGtmBlock(
+            isset($stored['gtm']) && is_array($stored['gtm']) ? $stored['gtm'] : []
         );
 
         return $resolved;
@@ -104,6 +112,10 @@ class ConversionPixelsResolver
 
         if (isset($overlay['custom_script_integration_ids']) && is_array($overlay['custom_script_integration_ids'])) {
             $base['custom_script_integration_ids'] = $overlay['custom_script_integration_ids'];
+        }
+
+        if (isset($overlay['gtm']) && is_array($overlay['gtm'])) {
+            $base['gtm'] = Product::normalizeGtmBlock($overlay['gtm']);
         }
 
         return $base;

@@ -3,7 +3,7 @@ import { ref } from 'vue';
 import { Link, router } from '@inertiajs/vue3';
 import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import Button from '@/components/ui/Button.vue';
-import { Mail, Settings2, Send, Plus, FileEdit, CheckCircle2, XCircle } from 'lucide-vue-next';
+import { Mail, Settings2, Send, Plus, FileEdit, CheckCircle2, XCircle, Pause, Play, Ban } from 'lucide-vue-next';
 
 defineOptions({ layout: LayoutInfoprodutor });
 
@@ -22,14 +22,49 @@ const props = defineProps({
 const activeTab = ref('campanhas');
 
 const statusLabel = (status) => {
-    const map = { draft: 'Rascunho', sending: 'Enviando', sent: 'Enviado', cancelled: 'Cancelado' };
+    const map = {
+        draft: 'Rascunho',
+        sending: 'Enviando',
+        paused: 'Pausada',
+        sent: 'Concluída',
+        cancelled: 'Cancelada',
+    };
     return map[status] ?? status;
+};
+
+const statusClass = (status) => {
+    const map = {
+        draft: 'text-zinc-500',
+        sending: 'text-blue-600 dark:text-blue-400',
+        paused: 'text-amber-600 dark:text-amber-400',
+        sent: 'text-emerald-600 dark:text-emerald-400',
+        cancelled: 'text-red-600 dark:text-red-400',
+    };
+    return map[status] ?? 'text-zinc-500';
 };
 
 function confirmSend(campaign) {
     if (!props.email_configured) return;
     if (!confirm(`Disparar campanha "${campaign.name}"? Os e-mails serão enviados em lotes de 30 por minuto.`)) return;
     router.post(`/email-marketing/${campaign.id}/send`);
+}
+
+function confirmPause(campaign) {
+    if (!confirm(`Pausar campanha "${campaign.name}"? Nenhum novo e-mail será enfileirado.`)) return;
+    router.post(`/email-marketing/${campaign.id}/pause`);
+}
+
+function confirmResume(campaign, retryFailures = false) {
+    const msg = retryFailures
+        ? `Retomar campanha "${campaign.name}" e tentar reenviar os e-mails que falharam?`
+        : `Retomar campanha "${campaign.name}"? O envio continuará para os destinatários pendentes.`;
+    if (!confirm(msg)) return;
+    router.post(`/email-marketing/${campaign.id}/resume`, { retry_failures: retryFailures });
+}
+
+function confirmCancel(campaign) {
+    if (!confirm(`Cancelar campanha "${campaign.name}"? O envio será interrompido permanentemente.`)) return;
+    router.post(`/email-marketing/${campaign.id}/cancel`);
 }
 </script>
 
@@ -114,13 +149,23 @@ function confirmSend(campaign) {
                             <p class="font-medium text-zinc-900 dark:text-white">{{ c.name }}</p>
                             <p class="text-sm text-zinc-500 dark:text-zinc-400">{{ c.subject }}</p>
                             <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                                {{ statusLabel(c.status) }}
-                                <template v-if="c.status === 'sending' || c.status === 'sent'">
+                                <span :class="statusClass(c.status)">{{ statusLabel(c.status) }}</span>
+                                <template v-if="['sending', 'paused', 'sent', 'cancelled'].includes(c.status)">
                                     — {{ c.sent_count ?? 0 }} / {{ c.total_recipients ?? 0 }} enviados
+                                    <template v-if="c.failed_count > 0">
+                                        · {{ c.failed_count }} falha(s)
+                                    </template>
                                 </template>
                             </p>
+                            <p
+                                v-if="c.last_error && (c.status === 'paused' || c.status === 'sending')"
+                                class="mt-1 line-clamp-2 text-xs text-amber-700 dark:text-amber-300"
+                                :title="c.last_error"
+                            >
+                                {{ c.last_error }}
+                            </p>
                         </div>
-                        <div class="flex shrink-0 gap-2">
+                        <div class="flex shrink-0 flex-wrap gap-2">
                             <Link v-if="c.status === 'draft'" :href="`/email-marketing/${c.id}/edit`">
                                 <Button variant="outline" size="sm" class="inline-flex items-center gap-1">
                                     <FileEdit class="h-3.5 w-3.5" />
@@ -136,6 +181,46 @@ function confirmSend(campaign) {
                             >
                                 <Send class="h-3.5 w-3.5" />
                                 Disparar
+                            </Button>
+                            <Button
+                                v-if="c.status === 'sending'"
+                                variant="outline"
+                                size="sm"
+                                class="inline-flex items-center gap-1"
+                                @click="confirmPause(c)"
+                            >
+                                <Pause class="h-3.5 w-3.5" />
+                                Pausar
+                            </Button>
+                            <Button
+                                v-if="c.status === 'paused'"
+                                variant="primary"
+                                size="sm"
+                                class="inline-flex items-center gap-1"
+                                @click="confirmResume(c, false)"
+                            >
+                                <Play class="h-3.5 w-3.5" />
+                                Retomar
+                            </Button>
+                            <Button
+                                v-if="c.status === 'paused' && c.failed_count > 0"
+                                variant="outline"
+                                size="sm"
+                                class="inline-flex items-center gap-1"
+                                @click="confirmResume(c, true)"
+                            >
+                                <Play class="h-3.5 w-3.5" />
+                                Retomar e reenviar falhas
+                            </Button>
+                            <Button
+                                v-if="c.status === 'sending' || c.status === 'paused'"
+                                variant="outline"
+                                size="sm"
+                                class="inline-flex items-center gap-1 text-red-600 hover:border-red-300 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+                                @click="confirmCancel(c)"
+                            >
+                                <Ban class="h-3.5 w-3.5" />
+                                Cancelar
                             </Button>
                         </div>
                     </li>

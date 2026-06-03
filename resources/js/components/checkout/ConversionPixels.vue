@@ -1,8 +1,16 @@
 <script setup>
-import { onMounted, onUnmounted, watch } from 'vue';
+import { onMounted, watch } from 'vue';
+import {
+    pushBeginCheckout,
+    pushPageView,
+    pushPaymentGenerated,
+    pushPurchase,
+} from '@/lib/checkoutDataLayer';
+import { getGtmContainerId } from '@/lib/pixelPlatforms';
 
 const props = defineProps({
     pixels: { type: Object, default: () => ({}) },
+    trackingContext: { type: Object, default: () => ({}) },
 });
 
 const emit = defineEmits(['ready']);
@@ -11,9 +19,11 @@ const emit = defineEmits(['ready']);
 let lastPixelsFingerprint = '';
 
 let gtagExternalScriptInserted = false;
+let gtmContainerInjected = false;
 const gtagConfiguredIds = new Set();
 const metaInitedPixelIds = new Set();
 const tiktokLoadedPixelIds = new Set();
+let pageViewPushed = false;
 
 /** Permite apenas IDs alfanuméricos, hífen e underscore para evitar XSS. */
 function isValidPixelId(id) {
@@ -28,11 +38,17 @@ function fingerprintPixels(pixels) {
             tiktok: pixels?.tiktok,
             google_ads: pixels?.google_ads,
             google_analytics: pixels?.google_analytics,
+            gtm: pixels?.gtm,
             custom_script: (pixels?.custom_script ?? []).map((x) => x?.id),
         });
     } catch {
         return '';
     }
+}
+
+function isValidGtmId(id) {
+    if (typeof id !== 'string') return false;
+    return /^GTM-[A-Z0-9]+$/i.test(id.trim());
 }
 
 function getMetaEntries(p) {
@@ -160,6 +176,9 @@ function injectMetaLibAndInit(metaEntries) {
     s.async = true;
     s.src = META_FBEvents_URL;
     s.setAttribute('data-getfy-fbevents', '1');
+    s.onload = () => {
+        runInits();
+    };
     s.onerror = () => {
         if (import.meta.env.DEV) {
             console.warn(
@@ -169,6 +188,39 @@ function injectMetaLibAndInit(metaEntries) {
     };
     document.head.appendChild(s);
     runInits();
+}
+
+function injectGtmContainer(containerId) {
+    const id = String(containerId || '').trim().toUpperCase();
+    if (!id || !isValidGtmId(id) || gtmContainerInjected) {
+        return;
+    }
+    if (document.querySelector(`script[data-getfy-gtm="${id}"]`)) {
+        gtmContainerInjected = true;
+        return;
+    }
+
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
+
+    const s = document.createElement('script');
+    s.async = true;
+    s.src = `https://www.googletagmanager.com/gtm.js?id=${encodeURIComponent(id)}`;
+    s.setAttribute('data-getfy-gtm', id);
+    document.head.appendChild(s);
+
+    const noscript = document.createElement('noscript');
+    noscript.setAttribute('data-getfy-gtm-noscript', id);
+    const iframe = document.createElement('iframe');
+    iframe.src = `https://www.googletagmanager.com/ns.html?id=${encodeURIComponent(id)}`;
+    iframe.height = '0';
+    iframe.width = '0';
+    iframe.style.display = 'none';
+    iframe.style.visibility = 'hidden';
+    noscript.appendChild(iframe);
+    document.body.appendChild(noscript);
+
+    gtmContainerInjected = true;
 }
 
 function injectTiktokWithFirstPixel(pixelId) {
@@ -300,6 +352,7 @@ function init() {
     const fp = fingerprintPixels(p);
     if (fp === lastPixelsFingerprint) return;
     lastPixelsFingerprint = fp;
+    pageViewPushed = false;
 
     metaInitedPixelIds.clear();
     tiktokLoadedPixelIds.clear();
@@ -316,6 +369,11 @@ function init() {
     }
 
     setupGtag(p);
+
+    const gtmId = getGtmContainerId(p);
+    if (gtmId) {
+        injectGtmContainer(gtmId);
+    }
 
     injectCustomScripts();
 
@@ -349,6 +407,23 @@ function shouldFireForEntry(entry, triggerType, isOrderBump) {
     return true;
 }
 
+function trackingExtras() {
+    const ctx = props.trackingContext || {};
+    return {
+        checkout_slug: ctx.checkout_slug,
+        product_name: ctx.product_name,
+        page_path: ctx.page_path,
+    };
+}
+
+function mapContentsToDataLayerItems(contents) {
+    return (contents || []).map((c) => ({
+        item_id: c.id,
+        price: c.item_price,
+        quantity: c.quantity,
+    }));
+}
+
 function normalizePurchaseContents(raw) {
     if (!Array.isArray(raw)) return [];
     return raw
@@ -361,6 +436,31 @@ function normalizePurchaseContents(raw) {
 }
 
 defineExpose({
+    firePageView(value = 0, currency = 'BRL', extras = {}) {
+        if (pageViewPushed) return;
+        pageViewPushed = true;
+        const num = Number(value) || 0;
+        const cur = typeof currency === 'string' && currency.trim() ? currency.trim().toUpperCase() : 'BRL';
+        pushPageView({
+            value: num,
+            currency: cur,
+            items: extras.items,
+            ...trackingExtras(),
+            ...(extras && typeof extras === 'object' ? extras : {}),
+        });
+    },
+    firePaymentGenerated(paymentMethod, value, currency = 'BRL', orderId = '', extras = {}) {
+        const num = Number(value) || 0;
+        const cur = typeof currency === 'string' && currency.trim() ? currency.trim().toUpperCase() : 'BRL';
+        pushPaymentGenerated({
+            payment_method: paymentMethod,
+            value: num,
+            currency: cur,
+            order_id: orderId,
+            ...trackingExtras(),
+            ...(extras && typeof extras === 'object' ? extras : {}),
+        });
+    },
     fireInitiateCheckout(value, currency = 'BRL', extras = {}) {
         const p = props.pixels || {};
         const num = Number(value) || 0;
@@ -370,6 +470,13 @@ defineExpose({
             currency: cur,
             ...(extras && typeof extras === 'object' ? extras : {}),
         };
+
+        pushBeginCheckout({
+            value: num,
+            currency: cur,
+            items: extras.items,
+            ...trackingExtras(),
+        });
 
         if (p.meta?.enabled && window.fbq) {
             getMetaEntries(p).forEach((entry) => {
@@ -455,6 +562,17 @@ defineExpose({
                 });
             });
         }
+
+        pushPurchase({
+            value: num,
+            currency: cur,
+            transaction_id: orderId,
+            order_id: orderId,
+            items: mapContentsToDataLayerItems(contents),
+            payment_type: triggerType,
+            trigger_type: triggerType,
+            ...trackingExtras(),
+        });
     },
 });
 </script>

@@ -343,6 +343,34 @@ const inputClass =
             </template>
         </div>
 
+        <div v-if="selectedPixelTab === 'gtm'" class="panel-card-md space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <h3 class="text-sm font-semibold text-zinc-900 dark:text-white">Google Tag Manager</h3>
+                <Toggle v-model="model.gtm.enabled" :disabled="disabled" />
+            </div>
+            <template v-if="model.gtm?.enabled">
+                <p class="text-sm text-zinc-600 dark:text-zinc-400">
+                    O container GTM carrega no checkout e recebe eventos no <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">dataLayer</code>:
+                    <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">page_view</code>,
+                    <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">begin_checkout</code>,
+                    <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">pix_generated</code>,
+                    <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">purchase</code>.
+                    Configure tags no GTM para ouvir esses eventos.
+                </p>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Container ID</label>
+                    <input
+                        v-model="model.gtm.container_id"
+                        type="text"
+                        placeholder="GTM-XXXXXXX"
+                        :class="inputClass"
+                        :disabled="disabled"
+                        @blur="model.gtm.container_id = (model.gtm.container_id || '').trim().toUpperCase()"
+                    />
+                </div>
+            </template>
+        </div>
+
         <div v-if="selectedPixelTab === 'custom_script'" class="panel-card-md space-y-4">
             <div class="flex items-center justify-between">
                 <h3 class="text-sm font-semibold text-zinc-900 dark:text-white">Scripts personalizados</h3>

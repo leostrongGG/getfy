@@ -38,6 +38,7 @@ export const DEFAULT_CONVERSION_PIXELS = {
     tiktok: { enabled: false, entries: [], integration_ids: [] },
     google_ads: { enabled: false, entries: [], integration_ids: [] },
     google_analytics: { enabled: false, entries: [], integration_ids: [] },
+    gtm: { enabled: false, container_id: '' },
     custom_script: [],
     custom_script_integration_ids: [],
 };
@@ -47,6 +48,7 @@ export const PIXEL_TABS = [
     { id: 'tiktok', label: 'TikTok Ads', image: '/images/pixels/tiktok.png' },
     { id: 'google_ads', label: 'Google Ads', image: '/images/pixels/googleads.png' },
     { id: 'google_analytics', label: 'Google Analytics', image: '/images/pixels/google-analytics.png' },
+    { id: 'gtm', label: 'Google Tag Manager', image: '/images/pixels/google-analytics.png' },
     { id: 'custom_script', label: 'Script personalizado', image: '/images/pixels/script.png' },
 ];
 
@@ -190,6 +192,13 @@ export function mergeConversionPixels(raw) {
               .map((id) => parseInt(id, 10))
               .filter((id) => !Number.isNaN(id))
         : [];
+
+    if (raw.gtm && typeof raw.gtm === 'object') {
+        out.gtm = {
+            enabled: !!raw.gtm.enabled,
+            container_id: String(raw.gtm.container_id ?? '').trim().toUpperCase(),
+        };
+    }
 
     return out;
 }

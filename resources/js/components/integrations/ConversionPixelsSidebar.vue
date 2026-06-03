@@ -32,6 +32,8 @@ const integrationsForTab = computed(() =>
     (props.conversion_pixel_integrations || []).filter((i) => i.platform === selectedTab.value)
 );
 
+const integrationTabs = computed(() => PIXEL_TABS.filter((tab) => tab.id !== 'gtm'));
+
 const form = ref({
     name: '',
     is_active: true,
@@ -206,7 +208,7 @@ async function destroyIntegration(integration) {
                     <div v-if="!showingForm" class="border-b border-zinc-200 px-3 py-3 dark:border-zinc-700">
                         <div class="flex gap-2 overflow-x-auto pb-1">
                             <button
-                                v-for="tab in PIXEL_TABS"
+                                v-for="tab in integrationTabs"
                                 :key="tab.id"
                                 type="button"
                                 :class="[
@@ -224,6 +226,27 @@ async function destroyIntegration(integration) {
                     </div>
 
                     <div class="flex-1 overflow-y-auto p-5">
+                        <div
+                            v-if="!showingForm"
+                            class="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/50 dark:text-zinc-400"
+                        >
+                            <p class="mb-2 font-medium text-zinc-800 dark:text-zinc-200">Tracking GTM e server-side</p>
+                            <ul class="list-inside list-disc space-y-1">
+                                <li>
+                                    O checkout publica eventos no
+                                    <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">dataLayer</code>
+                                    (<code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">page_view</code>,
+                                    <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">begin_checkout</code>,
+                                    <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">purchase</code>,
+                                    <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">pix_generated</code>).
+                                </li>
+                                <li>Configure tags no GTM ouvindo esses eventos. O container GTM é cadastrado em cada produto (Pixels → GTM).</li>
+                                <li>Meta CAPI exige <strong>access token</strong> na integração, não só Pixel ID.</li>
+                                <li>Utmify é integração separada dos pixels do checkout.</li>
+                                <li>Abandono é métrica interna do painel — não é enviado automaticamente ao GTM.</li>
+                                <li>Use <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-800">?tracking_debug=1</code> no checkout para ver falhas de API no console.</li>
+                            </ul>
+                        </div>
                         <p v-if="errorMessage" class="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">
                             {{ errorMessage }}
                         </p>

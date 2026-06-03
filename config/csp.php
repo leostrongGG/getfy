@@ -21,6 +21,8 @@ $scriptSources = [
     // Analytics / pixels
     'https://connect.facebook.net',
     'https://www.googletagmanager.com',
+    'https://www.googleadservices.com',
+    'https://googleads.g.doubleclick.net',
     'https://analytics.tiktok.com',
     'https://cdn.utmify.com.br',
     // Captcha
@@ -56,6 +58,10 @@ $connectSources = [
     // Pixels / analytics
     'https://www.facebook.com',
     'https://www.googletagmanager.com',
+    'https://www.googleadservices.com',
+    'https://googleads.g.doubleclick.net',
+    'https://stats.g.doubleclick.net',
+    'https://www.google.com',
     'https://analytics.tiktok.com',
     'https://www.google-analytics.com',
     'https://*.google-analytics.com',
@@ -106,7 +112,7 @@ return [
     /** script-src-elem: browsers modernos aplicam esta diretiva a <script src>. */
     'script_src_elem' => $scriptSources,
     'style_src' => ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-    'img_src' => ["'self'", 'data:', 'https:', 'blob:'],
+    'img_src' => ["'self'", 'data:', 'https:', 'blob:', 'https://www.googleadservices.com', 'https://googleads.g.doubleclick.net', 'https://www.google.com'],
     'font_src' => ["'self'", 'https://fonts.gstatic.com'],
     'connect_src' => $connectSources,
     'frame_src' => $frameSources,

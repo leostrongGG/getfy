@@ -6,6 +6,7 @@ use App\Models\Setting;
 use App\Services\ExchangeRateService;
 use App\Support\CheckoutCurrencyCatalog;
 use App\Support\CheckoutTranslations;
+use App\Support\SharedHostingUpdater;
 use Illuminate\Http\JsonResponse;
 use App\Support\DockerSetupState;
 use Illuminate\Http\Request;
@@ -35,6 +36,8 @@ class SettingsController extends Controller
         $currencies = CheckoutCurrencyCatalog::currenciesForCheckout($currencies);
 
         $gitAvailable = is_dir(base_path('.git'));
+        $updateMode = SharedHostingUpdater::updateMode();
+        $archivePreflight = SharedHostingUpdater::preflight();
         $cloudMode = (bool) config('getfy.cloud_mode', false);
         $dockerMode = DockerSetupState::isDocker();
         $cronSecret = config('getfy.cron_secret');
@@ -78,6 +81,9 @@ class SettingsController extends Controller
             'current_version' => $currentVersion,
             'updates_enabled' => config('getfy.updates_enabled', true),
             'git_available' => $gitAvailable,
+            'update_mode' => $updateMode,
+            'archive_ready' => (bool) ($archivePreflight['ok'] ?? false),
+            'preflight_warnings' => $archivePreflight['warnings'] ?? [],
             'cloud_mode' => $cloudMode,
             'docker_mode' => $dockerMode,
             'app_url' => $appUrl,

@@ -42,6 +42,18 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    update_mode: {
+        type: String,
+        default: 'archive',
+    },
+    archive_ready: {
+        type: Boolean,
+        default: true,
+    },
+    preflight_warnings: {
+        type: Array,
+        default: () => [],
+    },
     cloud_mode: {
         type: Boolean,
         default: false,
@@ -180,6 +192,7 @@ const tabs = computed(() => {
 const updateCheckLoading = ref(false);
 const updateCheckResult = ref(null);
 const updateRunLoading = ref(false);
+const lastUpdateSteps = ref(null);
 const integrityLoading = ref(false);
 const integrityResult = ref(null);
 const migrateLoading = ref(false);
@@ -206,25 +219,27 @@ async function checkForUpdate() {
 
 async function runUpdate() {
     updateRunLoading.value = true;
+    lastUpdateSteps.value = null;
     try {
         const res = await window.axios.post('/configuracoes/update/run', {}, {
             headers: { Accept: 'application/json' },
             maxRedirects: 0,
-            validateStatus: (status) => status >= 200 && status < 400,
+            validateStatus: (status) => status >= 200 && status < 500,
         });
+        if (res.data?.steps) {
+            lastUpdateSteps.value = res.data.steps;
+        }
         if (res.data?.success) {
             window.location.href = res.data.redirect || '/configuracoes?tab=update';
             return;
         }
         const msg = res.data?.message || 'Falha na atualização.';
-        if (typeof window.router !== 'undefined') {
-            window.router.visit('/configuracoes?tab=update', { preserveState: false });
-        } else {
-            window.location.href = '/configuracoes?tab=update';
-        }
-        setTimeout(() => { alert(msg); }, 100);
+        alert(msg);
     } catch (e) {
         const status = e?.response?.status;
+        if (e?.response?.data?.steps) {
+            lastUpdateSteps.value = e.response.data.steps;
+        }
         const msg =
             status === 429
                 ? 'Muitas tentativas em pouco tempo. Aguarde e tente novamente.'
@@ -1332,7 +1347,7 @@ const selectClass =
                                     {{ updateCheckLoading ? 'Verificando...' : 'Verificar atualização' }}
                                 </button>
                                 <button
-                                    v-if="updateCheckResult?.available && updates_enabled"
+                                    v-if="updateCheckResult?.available && updates_enabled && (update_mode === 'git' || archive_ready)"
                                     type="button"
                                     :disabled="updateRunLoading"
                                     class="inline-flex items-center gap-2 rounded-xl bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60"
@@ -1344,13 +1359,56 @@ const selectClass =
                             </div>
                         </div>
                         <div
-                            v-if="!git_available"
-                            class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/50 dark:bg-amber-900/20"
+                            class="rounded-xl border p-4"
+                            :class="update_mode === 'git'
+                                ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-800/50 dark:bg-emerald-900/20'
+                                : docker_mode
+                                    ? 'border-violet-200 bg-violet-50 dark:border-violet-800/50 dark:bg-violet-900/20'
+                                    : 'border-sky-200 bg-sky-50 dark:border-sky-800/50 dark:bg-sky-900/20'"
                         >
-                            <p class="text-sm font-medium text-amber-800 dark:text-amber-200">Git não detectado</p>
-                            <p class="mt-1 text-sm text-amber-700 dark:text-amber-300">
-                                O painel tentará atualizar baixando um pacote do GitHub e aplicando os arquivos por cima, preservando <code class="rounded bg-amber-100 px-1 dark:bg-amber-900/40">.env</code>, <code class="rounded bg-amber-100 px-1 dark:bg-amber-900/40">storage/</code>, <code class="rounded bg-amber-100 px-1 dark:bg-amber-900/40">database/</code> e <code class="rounded bg-amber-100 px-1 dark:bg-amber-900/40">plugins/</code>.
+                            <p class="text-sm font-medium" :class="update_mode === 'git' ? 'text-emerald-900 dark:text-emerald-100' : docker_mode ? 'text-violet-900 dark:text-violet-100' : 'text-sky-900 dark:text-sky-100'">
+                                {{ update_mode === 'git' ? 'Modo Git (VPS / servidor com terminal)' : docker_mode ? 'Modo Docker (download ZIP no container)' : 'Modo download ZIP (hospedagem compartilhada)' }}
                             </p>
+                            <p class="mt-1 text-sm" :class="update_mode === 'git' ? 'text-emerald-800 dark:text-emerald-200' : docker_mode ? 'text-violet-800 dark:text-violet-200' : 'text-sky-800 dark:text-sky-200'">
+                                <template v-if="update_mode === 'git'">
+                                    Atualização via <code class="rounded bg-emerald-100 px-1 dark:bg-emerald-900/40">git pull</code> + Composer + build.
+                                </template>
+                                <template v-else-if="docker_mode">
+                                    O código roda em container — o painel baixa a release do GitHub e aplica dentro do container, sem precisar de SSH.
+                                    Preserva <code class="rounded bg-violet-100 px-1 dark:bg-violet-900/40">.docker/</code>,
+                                    <code class="rounded bg-violet-100 px-1 dark:bg-violet-900/40">storage/</code> e uploads.
+                                </template>
+                                <template v-else>
+                                    Sem Git no servidor — o painel baixa a release do GitHub e aplica os arquivos, preservando
+                                    <code class="rounded bg-sky-100 px-1 dark:bg-sky-900/40">.env</code>,
+                                    <code class="rounded bg-sky-100 px-1 dark:bg-sky-900/40">storage/</code>,
+                                    <code class="rounded bg-sky-100 px-1 dark:bg-sky-900/40">plugins/</code> e uploads em
+                                    <code class="rounded bg-sky-100 px-1 dark:bg-sky-900/40">public/storage/</code>.
+                                </template>
+                            </p>
+                            <ul v-if="preflight_warnings.length && update_mode === 'archive'" class="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-800 dark:text-amber-200">
+                                <li v-for="(warn, idx) in preflight_warnings" :key="idx">{{ warn }}</li>
+                            </ul>
+                            <p v-else-if="update_mode === 'archive' && !archive_ready" class="mt-2 text-sm text-amber-800 dark:text-amber-200">
+                                Verifique permissões de escrita na pasta da aplicação e se a extensão PHP Zip está habilitada.
+                            </p>
+                        </div>
+                        <div v-if="lastUpdateSteps?.length" class="panel-card-sm">
+                            <p class="mb-2 text-sm font-medium text-zinc-900 dark:text-zinc-100">Detalhes da última tentativa</p>
+                            <div class="space-y-3">
+                                <div
+                                    v-for="(step, idx) in lastUpdateSteps"
+                                    :key="idx"
+                                    class="rounded-lg border px-3 py-2 text-xs"
+                                    :class="step.ok
+                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-100'
+                                        : 'border-red-200 bg-red-50 text-red-900 dark:border-red-800/50 dark:bg-red-900/20 dark:text-red-100'"
+                                >
+                                    <p class="font-semibold">{{ step.label }}</p>
+                                    <pre v-if="step.output" class="mt-1 whitespace-pre-wrap font-mono">{{ step.output }}</pre>
+                                    <pre v-if="step.error" class="mt-1 whitespace-pre-wrap font-mono opacity-90">{{ step.error }}</pre>
+                                </div>
+                            </div>
                         </div>
                         <div class="rounded-xl border border-sky-200 bg-sky-50 p-4 dark:border-sky-800/50 dark:bg-sky-900/20">
                             <p class="text-sm font-medium text-sky-900 dark:text-sky-100">Checkout, cartão ou pixels bloqueados?</p>
@@ -1429,6 +1487,9 @@ const selectClass =
                             <div v-if="migrateResult" class="mt-3 text-sm">
                                 <p v-if="migrateResult.success" class="text-emerald-700 dark:text-emerald-400">{{ migrateResult.message }}</p>
                                 <p v-else class="text-amber-700 dark:text-amber-300">{{ migrateResult.message }}</p>
+                                <p v-if="migrateResult.partial && migrateResult.pending > 0" class="mt-1 text-amber-700 dark:text-amber-300">
+                                    Restam {{ migrateResult.pending }} migrations — clique em "Rodar migrations" novamente.
+                                </p>
                                 <div v-if="(migrateResult.output ?? '').trim() !== ''" class="mt-2 panel-card-sm dark:bg-zinc-900/30">
                                     <pre class="whitespace-pre-wrap font-mono text-xs text-zinc-700 dark:text-zinc-300">{{ migrateResult.output }}</pre>
                                 </div>

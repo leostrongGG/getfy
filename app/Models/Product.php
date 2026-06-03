@@ -367,7 +367,26 @@ class Product extends Model
             'tiktok' => $emptyPlatform,
             'google_ads' => $emptyPlatform,
             'google_analytics' => $emptyPlatform,
+            'gtm' => ['enabled' => false, 'container_id' => ''],
             'custom_script' => [],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $block
+     * @return array{enabled: bool, container_id: string}
+     */
+    public static function normalizeGtmBlock(array $block): array
+    {
+        $enabled = filter_var($block['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $containerId = strtoupper(trim((string) ($block['container_id'] ?? '')));
+        if ($containerId !== '' && ! preg_match('/^GTM-[A-Z0-9]+$/', $containerId)) {
+            $containerId = '';
+        }
+
+        return [
+            'enabled' => $enabled && $containerId !== '',
+            'container_id' => $containerId,
         ];
     }
 

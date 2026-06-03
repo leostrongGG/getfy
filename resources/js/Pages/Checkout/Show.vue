@@ -488,6 +488,12 @@ const mainLinePriceBrl = computed(() => {
 
 const conversionPixels = computed(() => props.conversion_pixels || {});
 
+const pixelTrackingContext = computed(() => ({
+    checkout_slug: props.product?.checkout_slug ?? '',
+    product_name: props.product?.name ?? '',
+    page_path: typeof window !== 'undefined' ? window.location.pathname : '',
+}));
+
 const conversionPixelsRef = ref(null);
 let initiateCheckoutFiredForLoad = false;
 const pixelsReady = ref(false);
@@ -538,7 +544,7 @@ async function tryFirePendingPurchase() {
         currency: p.currency,
         meta_event_id: p.meta_event_id,
         purchase_contents: p.purchase_contents,
-    });
+    }, { pixels: conversionPixels.value });
     if (fired) {
         pendingPurchase.value = null;
     }
@@ -546,11 +552,14 @@ async function tryFirePendingPurchase() {
 
 function onConversionPixelsReady() {
     pixelsReady.value = true;
+    const api = conversionPixelsRef.value;
+    if (api?.firePageView) {
+        api.firePageView(pixelCheckoutTotal(), pixelCurrency.value);
+    }
     if (pendingPurchase.value) {
         tryFirePendingPurchase();
     }
     if (initiateCheckoutFiredForLoad) return;
-    const api = conversionPixelsRef.value;
     if (!api?.fireInitiateCheckout) return;
     initiateCheckoutFiredForLoad = true;
     lastInitiateCheckoutTotal = null;
@@ -596,7 +605,10 @@ async function onPaymentApproved(payload) {
         purchase_contents: Array.isArray(payload.purchase_contents) ? payload.purchase_contents : [],
     };
     pendingPurchase.value = purchasePayload;
-    await firePurchaseWhenReady(conversionPixelsRef.value, purchasePayload, { maxWaitMs: 3000 });
+    await firePurchaseWhenReady(conversionPixelsRef.value, purchasePayload, {
+        maxWaitMs: 3000,
+        pixels: conversionPixels.value,
+    });
     pendingPurchase.value = null;
 
     const redirectUrl = typeof payload.redirect_url === 'string' ? payload.redirect_url.trim() : '';
@@ -615,7 +627,12 @@ const hasCustomBodyEnd = computed(() => String(customBodyEndHtml.value).trim() !
 </script>
 
 <template>
-    <ConversionPixels ref="conversionPixelsRef" :pixels="conversionPixels" @ready="onConversionPixelsReady" />
+    <ConversionPixels
+        ref="conversionPixelsRef"
+        :pixels="conversionPixels"
+        :tracking-context="pixelTrackingContext"
+        @ready="onConversionPixelsReady"
+    />
     <Head>
         <title>{{ pageTitle }}</title>
         <meta v-if="pageDescription" name="description" :content="pageDescription" />

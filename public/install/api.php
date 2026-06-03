@@ -421,31 +421,7 @@ PWA_VAPID_PRIVATE=
             }
             $log[] = '[Fallback] APP_KEY gerada manualmente.';
         }
-        if (!$run([$phpExe, $artisan, 'migrate', '--force'])) {
-            // Fallback: executa migrate em processo (evita proc_open em hospedagens restritas)
-            try {
-                $log[] = 'Tentando migrate em processo...';
-                $autoload = $basePath . '/vendor/autoload.php';
-                if (!is_file($autoload)) {
-                    throw new Exception('vendor/autoload.php não encontrado.');
-                }
-                require $autoload;
-                $app = require $basePath . '/bootstrap/app.php';
-                $kernel = $app->make(\Illuminate\Contracts\Console\Kernel::class);
-                $kernel->bootstrap();
-                $kernel->call('migrate', ['--force' => true]);
-                $output = $kernel->output();
-                if ($output) {
-                    $log[] = trim($output);
-                }
-                $log[] = '[Fallback] Migrações executadas em processo.';
-            } catch (Throwable $e) {
-                $log[] = 'Erro em migrate (fallback): ' . get_class($e) . ' - ' . $e->getMessage();
-                $log[] = 'Em: ' . $e->getFile() . ':' . $e->getLine();
-                $sendJson(['success' => false, 'message' => 'Falha em migrate: ' . $e->getMessage(), 'log' => $logStr()]);
-            }
-        }
-        $sendJson(['success' => true, 'step' => 2, 'label' => 'Migrações concluídas']);
+        $sendJson(['success' => true, 'step' => 2, 'label' => 'Chave da aplicação gerada']);
     }
 
     if ($step === 3) {
@@ -473,13 +449,13 @@ PWA_VAPID_PRIVATE=
         $run([$phpExe, $artisan, 'storage:link']);
         if (!$run([$phpExe, $artisan, 'pwa:vapid'])) {
             try {
-                $autoload = $basePath . '/vendor/autoload.php';
-                if (is_file($autoload)) {
-                    require $autoload;
-                    $app = require $basePath . '/bootstrap/app.php';
-                    $app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-                    $app->make(\Illuminate\Contracts\Console\Kernel::class)->call('pwa:vapid');
+                require_once $basePath . '/vendor/autoload.php';
+                $artisanRunner = \App\Support\SharedHostingArtisan::class;
+                $vapid = $artisanRunner::runArtisanCommand($basePath, 'pwa:vapid');
+                if ($vapid['ok']) {
                     $log[] = '[Fallback] Chaves VAPID geradas em processo.';
+                } else {
+                    $log[] = '[Aviso] pwa:vapid falhou: ' . ($vapid['error'] ?? '') . ' – rode depois: php artisan pwa:vapid';
                 }
             } catch (Throwable $e) {
                 $log[] = '[Aviso] pwa:vapid falhou: ' . $e->getMessage() . ' – rode depois: php artisan pwa:vapid';
@@ -492,9 +468,18 @@ PWA_VAPID_PRIVATE=
         }
         $envContent = preg_replace('/^APP_INSTALLED\s*=.*$/mi', 'APP_INSTALLED=true', $envContent);
         file_put_contents($envPath, $envContent);
-        $run([$phpExe, $artisan, 'config:cache']);
-        $run([$phpExe, $artisan, 'route:cache']);
-        $run([$phpExe, $artisan, 'view:cache']);
+        try {
+            require_once $basePath . '/vendor/autoload.php';
+            \App\Support\SharedHostingArtisan::runArtisanCommand($basePath, 'config:clear');
+            \App\Support\SharedHostingArtisan::runArtisanCommand($basePath, 'config:cache');
+            \App\Support\SharedHostingArtisan::runArtisanCommand($basePath, 'route:cache');
+            \App\Support\SharedHostingArtisan::runArtisanCommand($basePath, 'view:cache');
+            $log[] = 'Cache gerado em processo.';
+        } catch (Throwable $e) {
+            $run([$phpExe, $artisan, 'config:cache']);
+            $run([$phpExe, $artisan, 'route:cache']);
+            $run([$phpExe, $artisan, 'view:cache']);
+        }
         $storageApp = $basePath . '/storage/app';
         if (!is_dir($storageApp)) {
             @mkdir($storageApp, 0755, true);
@@ -507,6 +492,34 @@ PWA_VAPID_PRIVATE=
         }
         $sendJson(['success' => true, 'step' => 4, 'redirect' => '/', 'label' => 'Instalação finalizada']);
     }
+}
+
+if ($action === 'migrate-chunk') {
+    @set_time_limit(120);
+    @ini_set('max_execution_time', '120');
+
+    if (!is_file($basePath . '/vendor/autoload.php')) {
+        $sendJson(['success' => false, 'message' => 'Pasta vendor não encontrada. Conclua a etapa de dependências primeiro.']);
+    }
+    if (!is_file($basePath . '/.env')) {
+        $sendJson(['success' => false, 'message' => 'Arquivo .env não encontrado. Reinicie a instalação.']);
+    }
+
+    require_once $basePath . '/vendor/autoload.php';
+    $chunk = max(1, min(15, (int) ($input['chunk'] ?? 8)));
+    $result = \App\Support\SharedHostingArtisan::runMigrateChunk($basePath, $chunk);
+
+    $sendJson([
+        'success' => (bool) ($result['ok'] ?? false),
+        'message' => ($result['ok'] ?? false)
+            ? (($result['done'] ?? false) ? 'Migrações concluídas.' : 'Migrations em andamento (' . ($result['pending'] ?? 0) . ' restantes)...')
+            : (string) ($result['error'] ?? 'Falha nas migrations.'),
+        'done' => (bool) ($result['done'] ?? false),
+        'pending' => (int) ($result['pending'] ?? 0),
+        'ran' => (int) ($result['ran'] ?? 0),
+        'failed_migration' => $result['failed_migration'] ?? null,
+        'log' => trim((string) (($result['output'] ?? '') . "\n" . ($result['error'] ?? ''))),
+    ]);
 }
 
 // Ação desconhecida

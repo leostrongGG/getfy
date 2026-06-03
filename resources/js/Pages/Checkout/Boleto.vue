@@ -5,12 +5,14 @@ import axios from 'axios';
 import { Copy, FileText, Check } from 'lucide-vue-next';
 import confetti from 'canvas-confetti';
 import ConversionPixels from '@/components/checkout/ConversionPixels.vue';
-import { redirectAfterPurchaseReady } from '@/composables/useConversionPurchase';
+import { firePurchaseWhenReady, redirectAfterPurchaseReady } from '@/composables/useConversionPurchase';
+import { shouldFirePurchaseOnBoletoGeneration } from '@/lib/pixelPlatforms';
 
 defineOptions({ layout: null });
 
 const conversionPixelsRef = ref(null);
 const pixelsReady = ref(false);
+const boletoGenerationPurchaseFired = ref(false);
 const pendingPurchasePayload = ref(null);
 const redirectAfterFiring = ref(null);
 
@@ -51,6 +53,30 @@ const hasCustomerInfo = computed(
     () => (props.customer_name || '') !== '' || (props.customer_email || '') !== '' || (props.customer_phone || '') !== ''
 );
 
+const pixelTrackingContext = computed(() => ({
+    checkout_slug: props.checkout_slug ?? '',
+    product_name: props.product_name ?? '',
+    page_path: typeof window !== 'undefined' ? window.location.pathname : '',
+}));
+
+async function fireBoletoGenerationEvents() {
+    if (boletoGenerationPurchaseFired.value) return;
+    const api = conversionPixelsRef.value;
+    if (!api) return;
+
+    api.firePaymentGenerated?.('boleto', props.amount, 'BRL', String(props.order_id), pixelTrackingContext.value);
+
+    if (shouldFirePurchaseOnBoletoGeneration(props.conversion_pixels)) {
+        const payload = buildPurchasePayloadFromStatus({});
+        await firePurchaseWhenReady(api, payload, {
+            maxWaitMs: 3000,
+            triggerType: 'boleto',
+            pixels: props.conversion_pixels,
+        });
+    }
+    boletoGenerationPurchaseFired.value = true;
+}
+
 function buildPurchasePayloadFromStatus(data) {
     const oid = data?.order_id ?? props.order_id;
     return {
@@ -90,6 +116,8 @@ async function flushPurchaseAndRedirect() {
         await redirectAfterPurchaseReady(api, payload, () => navigateToUrl(url), {
             maxWaitMs: 3000,
             redirectDelayMs: 0,
+            triggerType: 'approved',
+            pixels: props.conversion_pixels,
         });
         return;
     }
@@ -118,6 +146,11 @@ async function checkOrderStatus() {
 
 function onConversionPixelsReady() {
     pixelsReady.value = true;
+    const api = conversionPixelsRef.value;
+    if (api?.firePageView) {
+        api.firePageView(props.amount, 'BRL');
+    }
+    fireBoletoGenerationEvents();
     if (redirectAfterFiring.value) {
         flushPurchaseAndRedirect();
     }
@@ -164,7 +197,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-    <ConversionPixels ref="conversionPixelsRef" :pixels="props.conversion_pixels" @ready="onConversionPixelsReady" />
+    <ConversionPixels
+        ref="conversionPixelsRef"
+        :pixels="props.conversion_pixels"
+        :tracking-context="pixelTrackingContext"
+        @ready="onConversionPixelsReady"
+    />
     <Head>
         <title>Boleto gerado</title>
     </Head>

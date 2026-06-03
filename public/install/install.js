@@ -96,8 +96,15 @@
             formApp.classList.add('hidden');
             if (progressWrap) progressWrap.classList.remove('hidden');
 
-            const labels = ['Criando .env e instalando dependências (Composer)...', 'Gerando chave e executando migrações...', 'Instalando assets (npm build)...', 'Finalizando (cache, lock)...'];
+            const labels = [
+                'Criando .env e instalando dependências (Composer)...',
+                'Gerando chave da aplicação...',
+                'Instalando assets (npm build)...',
+                'Finalizando (cache, lock)...',
+            ];
+            const migrateLabel = 'Executando migrações do banco (pode levar vários minutos)...';
             const hints = ['Pode levar 2–5 min na primeira vez. Aguarde.', '', '', ''];
+            const migrateHint = 'Cada lote evita timeout da hospedagem. Não feche esta página.';
 
             const callStep = async (step) => {
                 const r = await fetch('api.php', {
@@ -106,14 +113,34 @@
                     body: JSON.stringify({ ...baseData, step })
                 });
                 const text = await r.text();
-                let res;
                 try {
-                    res = JSON.parse(text);
+                    return JSON.parse(text);
                 } catch (_) {
                     const msg = text.trim() ? text.slice(0, 200) : (r.status === 200 ? 'Resposta vazia (possível timeout – tente aumentar max_execution_time no PHP)' : 'Status ' + r.status + ': ' + r.statusText);
                     throw new Error('Resposta inválida: ' + msg);
                 }
-                return res;
+            };
+
+            const callMigrateChunk = async () => {
+                const r = await fetch('api.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    body: JSON.stringify({ action: 'migrate-chunk', chunk: 8 })
+                });
+                const text = await r.text();
+                try {
+                    return JSON.parse(text);
+                } catch (_) {
+                    throw new Error('Resposta inválida nas migrations: ' + (text.trim().slice(0, 200) || r.statusText));
+                }
+            };
+
+            const appendLog = (chunk) => {
+                if (!logEl || !chunk) return;
+                const line = typeof chunk === 'string' ? chunk : (chunk.log || chunk.message || '');
+                if (!line.trim()) return;
+                logEl.textContent = (logEl.textContent ? logEl.textContent + '\n' : '') + line.trim();
+                logEl.classList.remove('hidden');
             };
 
             try {
@@ -126,20 +153,65 @@
                         const hint = progressWrap.querySelector('.install-step-hint');
                         if (hint) hint.textContent = hints[step - 1] || '';
                     }
-                    if (barEl) barEl.style.width = (step - 0.5) * 25 + '%';
+                    if (barEl) barEl.style.width = Math.max(5, (step - 1) * 20 + 5) + '%';
+
                     const res = await callStep(step);
                     if (!res.success) {
                         if (errEl) {
                             errEl.textContent = res.message || 'Erro na instalação.';
                             errEl.classList.remove('hidden');
                         }
-                        if (logEl && res.log) {
-                            logEl.textContent = res.log;
-                            logEl.classList.remove('hidden');
-                        }
+                        appendLog(res.log);
                         return;
                     }
-                    if (barEl) barEl.style.width = step * 25 + '%';
+
+                    if (step === 2) {
+                        let migrateDone = false;
+                        let migrateLoops = 0;
+                        const maxLoops = 200;
+                        while (!migrateDone && migrateLoops < maxLoops) {
+                            migrateLoops++;
+                            if (statusEl) {
+                                statusEl.textContent = migrateLabel;
+                            }
+                            const mig = await callMigrateChunk();
+                            appendLog(mig.log || mig.message);
+                            if (!mig.success) {
+                                if (errEl) {
+                                    errEl.textContent = mig.message || 'Falha nas migrations.';
+                                    if (mig.failed_migration) {
+                                        errEl.textContent += ' (parou em: ' + mig.failed_migration + ')';
+                                    }
+                                    errEl.classList.remove('hidden');
+                                }
+                                return;
+                            }
+                            migrateDone = !!mig.done;
+                            const pending = typeof mig.pending === 'number' ? mig.pending : 0;
+                            if (progressWrap) {
+                                const hint = progressWrap.querySelector('.install-step-hint');
+                                if (hint) {
+                                    hint.textContent = migrateDone
+                                        ? 'Banco de dados pronto.'
+                                        : (pending > 0 ? pending + ' migrations restantes...' : migrateHint);
+                                }
+                            }
+                            if (barEl) {
+                                const base = 40;
+                                const progress = migrateDone ? 20 : Math.min(18, migrateLoops * 2);
+                                barEl.style.width = (base + progress) + '%';
+                            }
+                        }
+                        if (!migrateDone) {
+                            if (errEl) {
+                                errEl.textContent = 'Migrations não concluíram a tempo. Recarregue a página e tente continuar, ou rode migrations em Configurações > Update.';
+                                errEl.classList.remove('hidden');
+                            }
+                            return;
+                        }
+                    }
+
+                    if (barEl) barEl.style.width = step * 20 + '%';
                 }
                 if (barEl) barEl.style.width = '100%';
                 if (statusEl) statusEl.textContent = 'Concluído!';

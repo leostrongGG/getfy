@@ -17,10 +17,13 @@ class ContentSecurityPolicyTest extends TestCase
         $this->assertStringContainsString('https://cdn.cajupay.com.br', $scriptSrc);
         $this->assertStringContainsString('https://cdn.utmify.com.br', $scriptSrc);
         $this->assertStringContainsString('https://challenges.cloudflare.com', $scriptSrc);
+        $this->assertStringContainsString('https://www.googleadservices.com', $scriptSrc);
 
         $this->assertStringContainsString('https://api.cajupay.com.br', $connectSrc);
         $this->assertStringContainsString('https://tokenizer.sejaefi.com.br', $connectSrc);
         $this->assertStringContainsString('https://www.google-analytics.com', $connectSrc);
+        $this->assertStringContainsString('https://www.googleadservices.com', $connectSrc);
+        $this->assertStringContainsString('https://googleads.g.doubleclick.net', $connectSrc);
         $this->assertStringContainsString('https://api.utmify.com.br', $connectSrc);
     }
 

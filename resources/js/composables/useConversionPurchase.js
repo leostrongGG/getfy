@@ -1,3 +1,9 @@
+import {
+    pixelsNeedGoogle,
+    pixelsNeedMeta,
+    pixelsNeedTiktok,
+} from '@/lib/pixelPlatforms';
+
 const PURCHASE_FIRED_PREFIX = 'getfy_purchase_fired_';
 
 export function purchaseFiredStorageKey(orderId) {
@@ -30,12 +36,43 @@ function metaPixelReady() {
     return typeof window !== 'undefined' && typeof window.fbq === 'function';
 }
 
+function gtagReady() {
+    return typeof window !== 'undefined' && typeof window.gtag === 'function';
+}
+
+function tiktokReady() {
+    return typeof window !== 'undefined' && typeof window.ttq?.track === 'function';
+}
+
 /**
- * Dispara Purchase no browser quando o pixel estiver pronto.
+ * Aguarda SDKs necessários conforme pixels configurados.
+ *
+ * @param {object|null} pixels
+ * @param {number} maxWaitMs
+ */
+export async function waitForPixelSdks(pixels, maxWaitMs = 3000) {
+    const needMeta = pixelsNeedMeta(pixels);
+    const needGoogle = pixelsNeedGoogle(pixels);
+    const needTiktok = pixelsNeedTiktok(pixels);
+    const started = Date.now();
+
+    while (Date.now() - started < maxWaitMs) {
+        const metaOk = !needMeta || metaPixelReady();
+        const googleOk = !needGoogle || gtagReady();
+        const tiktokOk = !needTiktok || tiktokReady();
+        if (metaOk && googleOk && tiktokOk) {
+            return;
+        }
+        await sleep(80);
+    }
+}
+
+/**
+ * Dispara Purchase no browser quando os pixels estiverem prontos.
  *
  * @param {object|null} pixelsApi - expose de ConversionPixels (firePurchase)
  * @param {object} payload - { order_id, amount, currency, meta_event_id, purchase_contents }
- * @param {object} options - { maxWaitMs, skipDedup }
+ * @param {object} options - { maxWaitMs, skipDedup, triggerType, pixels }
  * @returns {Promise<boolean>} true se disparou (ou já estava deduplicado)
  */
 export async function firePurchaseWhenReady(pixelsApi, payload, options = {}) {
@@ -46,15 +83,14 @@ export async function firePurchaseWhenReady(pixelsApi, payload, options = {}) {
 
     const maxWaitMs = Math.max(500, Number(options.maxWaitMs) || 3000);
     const skipDedup = !!options.skipDedup;
+    const triggerType = options.triggerType || 'approved';
+    const pixels = options.pixels ?? null;
 
     if (!skipDedup && wasPurchaseFired(orderId)) {
         return true;
     }
 
-    const started = Date.now();
-    while (!metaPixelReady() && Date.now() - started < maxWaitMs) {
-        await sleep(80);
-    }
+    await waitForPixelSdks(pixels, maxWaitMs);
 
     if (!skipDedup && wasPurchaseFired(orderId)) {
         return true;
@@ -71,7 +107,7 @@ export async function firePurchaseWhenReady(pixelsApi, payload, options = {}) {
             : `getfy_purchase_${orderId}`;
     const contents = Array.isArray(payload.purchase_contents) ? payload.purchase_contents : [];
 
-    pixelsApi.firePurchase(amount, currency, String(orderId), false, 'approved', {
+    pixelsApi.firePurchase(amount, currency, String(orderId), false, triggerType, {
         eventId: metaEventId,
         contents,
     });

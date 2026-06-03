@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { useForm, router } from '@inertiajs/vue3';
 import axios from 'axios';
+import { logTrackingApiError } from '@/lib/checkoutTrackingDebug';
 import { User, UserRound, Mail, ShoppingBag, Loader2, CreditCard, Tag, Check, Pencil, ScanQrCode, Shield, X, AlertCircle, FileText, MapPin } from 'lucide-vue-next';
 import CheckoutDropdown from './CheckoutDropdown.vue';
 import CheckoutOrderBumps from './CheckoutOrderBumps.vue';
@@ -149,8 +150,8 @@ function persistCheckoutCountry() {
                 session_token: props.checkoutSessionToken,
                 country_code: resolveCheckoutCountryIso(),
             });
-        } catch (_) {
-            /* silencioso */
+        } catch (err) {
+            logTrackingApiError('/api/checkout/track-country', err);
         }
         countryTrackTimeout = null;
     }, 400);
@@ -839,7 +840,8 @@ function callTrackApi(step, email, name) {
                 name: name || undefined,
                 country_code: resolveCheckoutCountryIso(),
             });
-        } catch (_) {
+        } catch (err) {
+            logTrackingApiError('/api/checkout/track', err);
             trackStepSent.value[step] = false;
         }
         trackTimeout = null;
@@ -876,7 +878,8 @@ function callTrackFieldApi(fieldKey, event) {
                 field_key: fieldKey,
                 event,
             });
-        } catch (_) {
+        } catch (err) {
+            logTrackingApiError('/api/checkout/track-field', err);
             trackFieldSent.value[key] = false;
         }
     }, 500);

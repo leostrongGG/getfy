@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\EmailCampaign;
+use App\Models\EmailCampaignSend;
 use App\Models\Order;
 use Illuminate\Support\Collection;
 
@@ -62,7 +63,10 @@ class EmailCampaignRecipientsService
         $tenantId = $campaign->tenant_id;
         $all = $this->getRecipients($tenantId, $filterConfig);
 
-        $sentEmails = $campaign->emailCampaignSends()->pluck('email')->flip();
+        $sentEmails = $campaign->emailCampaignSends()
+            ->whereIn('status', [EmailCampaignSend::STATUS_SENT, EmailCampaignSend::STATUS_FAILED])
+            ->pluck('email')
+            ->flip();
         $pending = $all->filter(fn ($r) => ! $sentEmails->has($r['email']));
 
         return $pending->take($limit)->values();

@@ -600,6 +600,9 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::put('/email-marketing/{campaign}', [\App\Http\Controllers\EmailMarketingController::class, 'update'])->name('email-marketing.update');
         Route::post('/email-marketing/{campaign}/preview-recipients', [\App\Http\Controllers\EmailMarketingController::class, 'previewRecipients'])->name('email-marketing.preview-recipients');
         Route::post('/email-marketing/{campaign}/send', [\App\Http\Controllers\EmailMarketingController::class, 'send'])->name('email-marketing.send');
+        Route::post('/email-marketing/{campaign}/pause', [\App\Http\Controllers\EmailMarketingController::class, 'pause'])->name('email-marketing.pause');
+        Route::post('/email-marketing/{campaign}/resume', [\App\Http\Controllers\EmailMarketingController::class, 'resume'])->name('email-marketing.resume');
+        Route::post('/email-marketing/{campaign}/cancel', [\App\Http\Controllers\EmailMarketingController::class, 'cancel'])->name('email-marketing.cancel');
     });
 
 });

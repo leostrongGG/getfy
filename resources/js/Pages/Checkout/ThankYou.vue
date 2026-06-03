@@ -37,7 +37,7 @@ async function onConversionPixelsReady() {
         currency: cur,
         meta_event_id: eid,
         purchase_contents: props.purchase_contents,
-    });
+    }, { pixels: props.conversion_pixels });
 }
 </script>
 

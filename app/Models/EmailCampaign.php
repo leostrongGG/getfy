@@ -11,6 +11,8 @@ class EmailCampaign extends Model
 
     public const STATUS_SENDING = 'sending';
 
+    public const STATUS_PAUSED = 'paused';
+
     public const STATUS_SENT = 'sent';
 
     public const STATUS_CANCELLED = 'cancelled';
@@ -26,6 +28,8 @@ class EmailCampaign extends Model
         'sent_count',
         'scheduled_at',
         'sent_at',
+        'paused_at',
+        'last_error',
     ];
 
     protected function casts(): array
@@ -34,6 +38,7 @@ class EmailCampaign extends Model
             'filter_config' => 'array',
             'scheduled_at' => 'datetime',
             'sent_at' => 'datetime',
+            'paused_at' => 'datetime',
             'total_recipients' => 'integer',
             'sent_count' => 'integer',
         ];
@@ -68,8 +73,33 @@ class EmailCampaign extends Model
         return $this->status === self::STATUS_SENDING;
     }
 
+    public function isPaused(): bool
+    {
+        return $this->status === self::STATUS_PAUSED;
+    }
+
+    public function isCancelled(): bool
+    {
+        return $this->status === self::STATUS_CANCELLED;
+    }
+
     public function isSent(): bool
     {
         return $this->status === self::STATUS_SENT;
+    }
+
+    public function canPause(): bool
+    {
+        return $this->isSending();
+    }
+
+    public function canResume(): bool
+    {
+        return $this->isPaused();
+    }
+
+    public function canCancel(): bool
+    {
+        return $this->isSending() || $this->isPaused();
     }
 }

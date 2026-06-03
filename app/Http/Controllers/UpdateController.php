@@ -3,6 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Support\DockerSetupState;
+use App\Support\GitPanelUpdater;
+use App\Support\SharedHostingArtisan;
+use App\Support\SharedHostingUpdater;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -93,19 +96,6 @@ class UpdateController extends Controller
         return $latest;
     }
 
-    private static function canRunProcess(): bool
-    {
-        if (! function_exists('proc_open')) {
-            return false;
-        }
-        $disabled = ini_get('disable_functions');
-        if (! is_string($disabled) || trim($disabled) === '') {
-            return true;
-        }
-        $parts = array_map('trim', explode(',', $disabled));
-        return ! in_array('proc_open', $parts, true);
-    }
-
     private static function isWindows(): bool
     {
         return DIRECTORY_SEPARATOR === '\\';
@@ -122,63 +112,6 @@ class UpdateController extends Controller
         }
 
         return is_dir($path) && is_writable($path);
-    }
-
-    private static function copyTree(string $sourceDir, string $targetDir, array $preserveTopLevel, array $preserveRelativePaths = []): array
-    {
-        $sourceDir = rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $sourceDir), DIRECTORY_SEPARATOR);
-        $targetDir = rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $targetDir), DIRECTORY_SEPARATOR);
-
-        $copied = 0;
-        $skipped = 0;
-        $errors = [];
-        $preserveRelativePaths = array_values(array_filter(array_map(fn ($p) => str_replace(['\\', '/'], '/', trim((string) $p, '/')), $preserveRelativePaths), fn ($p) => $p !== ''));
-
-        $files = File::allFiles($sourceDir);
-        foreach ($files as $file) {
-            $path = $file->getPathname();
-            $relative = ltrim(str_replace($sourceDir, '', $path), DIRECTORY_SEPARATOR);
-            $relativeNormalized = str_replace(['\\', '/'], '/', $relative);
-            if ($relativeNormalized === '' || str_contains($relativeNormalized, '..')) {
-                $skipped++;
-                continue;
-            }
-
-            if (in_array($relativeNormalized, $preserveRelativePaths, true)) {
-                $skipped++;
-                continue;
-            }
-
-            $parts = explode('/', $relativeNormalized);
-            $top = $parts[0] ?? '';
-            if ($top !== '' && in_array($top, $preserveTopLevel, true)) {
-                $skipped++;
-                continue;
-            }
-
-            $targetPath = $targetDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativeNormalized);
-            $targetParent = dirname($targetPath);
-            if (! is_dir($targetParent)) {
-                try {
-                    File::makeDirectory($targetParent, 0755, true);
-                } catch (\Throwable $e) {
-                    $errors[] = 'Falha ao criar diretório: ' . $relativeNormalized;
-                    continue;
-                }
-            }
-
-            try {
-                if (! @copy($path, $targetPath)) {
-                    $errors[] = 'Falha ao copiar: ' . $relativeNormalized;
-                    continue;
-                }
-                $copied++;
-            } catch (\Throwable $e) {
-                $errors[] = 'Falha ao copiar: ' . $relativeNormalized;
-            }
-        }
-
-        return ['copied' => $copied, 'skipped' => $skipped, 'errors' => $errors];
     }
 
     private function resolveLatestTagRaw(): array
@@ -229,8 +162,8 @@ class UpdateController extends Controller
         }
 
         return rtrim($message) . "\n\n" .
-            "Se você está usando VPS com Docker e a atualização pelo painel falhar, faça manualmente no terminal da VPS:\n" .
-            self::DOCKER_MANUAL_UPDATE_COMMAND;
+            "Docker: o painel atualiza baixando o pacote oficial (ZIP) dentro do container, preservando .env, storage/ e .docker/. "
+            . "Para rebuild completo da imagem no servidor (opcional): " . self::DOCKER_MANUAL_UPDATE_COMMAND;
     }
 
     private static function cleanupViteHotFiles(): array
@@ -263,9 +196,19 @@ class UpdateController extends Controller
 
     private function runArchiveUpdate(string $basePath, string $branch): array
     {
-        if (! class_exists('ZipArchive')) {
-            return ['ok' => false, 'message' => 'A extensão PHP Zip não está habilitada.', 'details' => []];
+        @set_time_limit(600);
+        @ini_set('max_execution_time', '600');
+
+        $preflight = SharedHostingUpdater::preflight();
+        if (! ($preflight['ok'] ?? false)) {
+            return [
+                'ok' => false,
+                'message' => 'Servidor não está pronto para atualização automática: ' . implode(' ', $preflight['warnings'] ?? []),
+                'details' => ['preflight' => $preflight],
+            ];
         }
+
+        SharedHostingUpdater::clearCachesBeforeUpdate();
 
         $tmpDir = storage_path('app' . DIRECTORY_SEPARATOR . '.update-tmp');
         if (! self::ensureWritableDir($tmpDir)) {
@@ -343,27 +286,60 @@ class UpdateController extends Controller
             ? $extractTo . DIRECTORY_SEPARATOR . $baseInZip
             : $extractTo;
 
-        $preserveTopLevel = ['.env', '.git', '.install', 'storage', 'plugins', 'node_modules'];
-        $preserveRelativePaths = ['database/database.sqlite'];
-        $result = self::copyTree($sourceDir, $basePath, $preserveTopLevel, $preserveRelativePaths);
+        $result = SharedHostingUpdater::copyTree($sourceDir, $basePath);
         self::cleanupViteHotFiles();
 
         File::deleteDirectory($extractTo);
         @unlink($zipFile);
 
-        if (! empty($result['errors'])) {
+        $criticalErrors = $result['critical_errors'] ?? [];
+        $minorErrors = array_values(array_diff($result['errors'] ?? [], $criticalErrors));
+        $maxMinorErrors = 15;
+
+        if ($criticalErrors !== []) {
             return [
                 'ok' => false,
-                'message' => 'Atualização aplicada parcialmente. Alguns arquivos não puderam ser copiados.',
-                'details' => $result,
+                'message' => 'Atualização interrompida: arquivos essenciais não puderam ser copiados. Verifique permissões da pasta (chmod 755) ou atualize via FTP.',
+                'details' => [
+                    ...$result,
+                    'critical_errors' => $criticalErrors,
+                    'minor_errors' => array_slice($minorErrors, 0, 50),
+                ],
             ];
+        }
+
+        if (count($minorErrors) > $maxMinorErrors) {
+            return [
+                'ok' => false,
+                'message' => 'Muitos arquivos secundários falharam ao copiar (' . count($minorErrors) . '). Permissões insuficientes na hospedagem.',
+                'details' => [
+                    ...$result,
+                    'minor_errors' => array_slice($minorErrors, 0, 50),
+                ],
+            ];
+        }
+
+        $versionNorm = $tagRaw ? self::normalizeVersion($tagRaw) : null;
+        if ($versionNorm) {
+            @file_put_contents($basePath . DIRECTORY_SEPARATOR . 'VERSION', $versionNorm . "\n");
+        }
+
+        $composer = SharedHostingUpdater::tryComposerInstall($basePath);
+
+        $message = 'Arquivos atualizados com sucesso.';
+        if ($minorErrors !== []) {
+            $message .= ' Alguns arquivos secundários foram ignorados (' . count($minorErrors) . ').';
         }
 
         return [
             'ok' => true,
-            'message' => 'Arquivos atualizados com sucesso.',
-            'details' => $result,
-            'tag' => $tagRaw ? self::normalizeVersion($tagRaw) : null,
+            'message' => $message,
+            'details' => [
+                ...$result,
+                'minor_errors' => array_slice($minorErrors, 0, 20),
+                'composer' => $composer,
+            ],
+            'tag' => $versionNorm,
             'changelog' => $meta['changelog'] ?? null,
         ];
     }
@@ -374,12 +350,17 @@ class UpdateController extends Controller
     public function check(): JsonResponse
     {
         $current = self::readInstalledVersion();
+        $preflight = SharedHostingUpdater::preflight();
         $response = [
             'current' => $current,
             'latest' => null,
             'available' => false,
             'error' => null,
             'changelog_remote' => null,
+            'update_mode' => SharedHostingUpdater::updateMode(),
+            'docker_mode' => DockerSetupState::isDocker(),
+            'archive_ready' => (bool) ($preflight['ok'] ?? false),
+            'preflight_warnings' => $preflight['warnings'] ?? [],
         ];
 
         try {
@@ -505,8 +486,24 @@ class UpdateController extends Controller
     public function migrateNow(Request $request): JsonResponse|RedirectResponse
     {
         try {
-            \Illuminate\Support\Facades\Artisan::call('migrate', ['--force' => true]);
-            $output = (string) \Illuminate\Support\Facades\Artisan::output();
+            SharedHostingArtisan::clearCaches(base_path());
+            $result = SharedHostingArtisan::runMigrateAll(base_path(), 90, SharedHostingArtisan::DEFAULT_MIGRATE_CHUNK);
+            $output = self::toUtf8((string) ($result['output'] ?? ''));
+
+            if (! ($result['ok'] ?? false)) {
+                $msg = self::withDockerManualHint((string) ($result['error'] ?? 'Falha ao rodar migrations.'));
+                if ($request->wantsJson()) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => $msg,
+                        'output' => $output,
+                        'pending' => (int) ($result['pending'] ?? 0),
+                        'partial' => (bool) ($result['partial'] ?? false),
+                    ], 422);
+                }
+
+                return redirect()->route('settings.index', ['tab' => 'update'])->with('error', $msg);
+            }
 
             try {
                 \Illuminate\Support\Facades\Artisan::call('config:clear');
@@ -514,9 +511,19 @@ class UpdateController extends Controller
             } catch (\Throwable) {
             }
 
-            $msg = 'Migrations executadas com sucesso.';
+            $ran = (int) ($result['ran'] ?? 0);
+            $msg = ($result['partial'] ?? false)
+                ? "Migrations parcialmente executadas ({$ran} nesta rodada). Clique novamente para continuar."
+                : ($ran > 0 ? "Migrations executadas com sucesso ({$ran} nesta rodada)." : 'Migrations executadas com sucesso.');
+
             if ($request->wantsJson()) {
-                return response()->json(['success' => true, 'message' => $msg, 'output' => self::toUtf8($output)]);
+                return response()->json([
+                    'success' => true,
+                    'message' => $msg,
+                    'output' => $output,
+                    'pending' => (int) ($result['pending'] ?? 0),
+                    'partial' => (bool) ($result['partial'] ?? false),
+                ]);
             }
 
             return redirect()->route('settings.index', ['tab' => 'update'])->with('success', $msg);
@@ -535,6 +542,9 @@ class UpdateController extends Controller
      */
     public function run(Request $request): JsonResponse|RedirectResponse
     {
+        @set_time_limit(600);
+        @ini_set('max_execution_time', '600');
+
         if (! config('getfy.updates_enabled', true)) {
             if ($request->wantsJson()) {
                 return response()->json(['success' => false, 'message' => 'Atualizações pela interface estão desativadas.'], 403);
@@ -558,7 +568,6 @@ class UpdateController extends Controller
         $branch = config('getfy.update_branch', 'main');
         $expectedRepo = config('getfy.update_repository_url', 'https://github.com/getfy-opensource/getfy.git');
         $timeout = 300;
-        $git = 'git -c safe.directory=' . escapeshellarg($basePath);
 
         // PHP executável (servidor web muitas vezes não tem PHP no PATH; usar caminho explícito ou GETFY_PHP_PATH)
         $phpBinary = null;
@@ -604,23 +613,25 @@ class UpdateController extends Controller
         };
 
         $hasGitRepo = is_dir($basePath . DIRECTORY_SEPARATOR . '.git');
+        $useGitUpdate = $hasGitRepo
+            && SharedHostingUpdater::canRunProcess()
+            && SharedHostingUpdater::updateMode() === 'git';
 
-        if ($hasGitRepo && self::canRunProcess()) {
-            $runStep($git . ' config user.email "getfy-update@localhost" && ' . $git . ' config user.name "Getfy Update"', 'Git config');
-            $runStep($git . ' stash push -m "getfy-update"', 'Git stash');
-
-            if (! $runStep($git . " fetch origin && " . $git . " pull origin {$branch}", 'Git pull')) {
-                $runStep($git . ' stash pop', 'Git stash pop');
+        if ($useGitUpdate) {
+            $gitResult = GitPanelUpdater::run($basePath, $branch, $runStep);
+            if (! ($gitResult['ok'] ?? false)) {
                 $last = end($steps);
-                $msg = self::withDockerManualHint('Falha ao atualizar código: ' . self::toUtf8($last['error'] ?: $last['output'] ?: 'erro desconhecido'));
+                $detail = is_array($last) ? self::toUtf8($last['error'] ?: $last['output'] ?: '') : '';
+                $msg = self::withDockerManualHint(
+                    ($gitResult['message'] ?? 'Falha ao atualizar código.')
+                    . ($detail !== '' ? ' ' . $detail : '')
+                );
                 if ($request->wantsJson()) {
                     return response()->json(['success' => false, 'message' => $msg, 'steps' => $steps], 422);
                 }
 
                 return redirect()->route('settings.index', ['tab' => 'update'])->with('error', $msg);
             }
-
-            $runStep($git . ' stash pop', 'Git stash pop');
 
             $composerCmd = 'composer install --no-interaction --no-dev';
             $vendorComposer = $basePath . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'composer';
@@ -638,17 +649,24 @@ class UpdateController extends Controller
                 return redirect()->route('settings.index', ['tab' => 'update'])->with('error', $msg);
             }
 
-            $npmOk = true;
-            $npmOutput = '';
-            $npmError = '';
-            $npmVersion = Process::path($basePath)->timeout(10)->env($processEnv)->run(self::isWindows() ? 'npm --version' : 'npm --version');
-            if (! $npmVersion->successful()) {
-                $npmOk = true;
-                $npmOutput = 'npm não encontrado; pulando build.';
-                $npmError = self::toUtf8($npmVersion->errorOutput());
-                $steps[] = ['label' => 'NPM build', 'ok' => $npmOk, 'output' => $npmOutput, 'error' => $npmError];
+            $skipNpm = DockerSetupState::isDocker();
+            if ($skipNpm) {
+                $steps[] = [
+                    'label' => 'NPM build',
+                    'ok' => true,
+                    'output' => 'Docker: build do frontend já incluído no pacote de release.',
+                    'error' => '',
+                ];
             } else {
-                if (! $runStep('npm ci && npm run build', 'NPM build')) {
+                $npmVersion = Process::path($basePath)->timeout(10)->env($processEnv)->run('npm --version');
+                if (! $npmVersion->successful()) {
+                    $steps[] = [
+                        'label' => 'NPM build',
+                        'ok' => true,
+                        'output' => 'npm não encontrado; pulando build.',
+                        'error' => self::toUtf8($npmVersion->errorOutput()),
+                    ];
+                } elseif (! $runStep('npm ci && npm run build', 'NPM build')) {
                     $last = end($steps);
                     $msg = self::withDockerManualHint('Falha no build do frontend: ' . self::toUtf8($last['error'] ?: $last['output'] ?: 'erro desconhecido'));
                     if ($request->wantsJson()) {
@@ -668,12 +686,33 @@ class UpdateController extends Controller
             ];
         } else {
             $archive = $this->runArchiveUpdate($basePath, $branch);
+            $archiveDetails = is_array($archive['details'] ?? null) ? $archive['details'] : [];
+            $errorLines = array_merge(
+                $archiveDetails['critical_errors'] ?? [],
+                $archiveDetails['minor_errors'] ?? array_slice($archiveDetails['errors'] ?? [], 0, 30)
+            );
             $steps[] = [
-                'label' => 'Atualização por download',
+                'label' => 'Atualização por download (ZIP)',
                 'ok' => (bool) ($archive['ok'] ?? false),
-                'output' => self::toUtf8((string) ($archive['message'] ?? '')),
-                'error' => self::toUtf8((string) (! empty($archive['details']['errors']) ? implode("\n", (array) $archive['details']['errors']) : '')),
+                'output' => self::toUtf8(
+                    (string) ($archive['message'] ?? '')
+                    . (isset($archiveDetails['copied']) ? "\nCopiados: {$archiveDetails['copied']}, ignorados: {$archiveDetails['skipped']}" : '')
+                ),
+                'error' => self::toUtf8(implode("\n", array_map(
+                    fn ($p) => is_string($p) ? $p : (string) $p,
+                    $errorLines
+                ))),
             ];
+
+            $composerResult = $archiveDetails['composer'] ?? null;
+            if (is_array($composerResult)) {
+                $steps[] = [
+                    'label' => 'Composer (dependências PHP)',
+                    'ok' => (bool) ($composerResult['ok'] ?? true),
+                    'output' => self::toUtf8((string) ($composerResult['output'] ?? '')),
+                    'error' => self::toUtf8((string) ($composerResult['error'] ?? '')),
+                ];
+            }
 
             if (! ($archive['ok'] ?? false)) {
                 $msg = self::withDockerManualHint((string) ($archive['message'] ?? 'Falha ao atualizar.'));
@@ -694,7 +733,28 @@ class UpdateController extends Controller
 
         // 4. Migrate
         try {
-            \Illuminate\Support\Facades\Artisan::call('migrate', ['--force' => true]);
+            SharedHostingArtisan::clearCaches($basePath);
+            $migrateResult = SharedHostingArtisan::runMigrateAll($basePath, 120, SharedHostingArtisan::DEFAULT_MIGRATE_CHUNK);
+            $steps[] = [
+                'label' => 'Migrations',
+                'ok' => (bool) ($migrateResult['ok'] ?? false) && ! ($migrateResult['partial'] ?? false),
+                'output' => self::toUtf8((string) ($migrateResult['output'] ?? '')),
+                'error' => ($migrateResult['partial'] ?? false)
+                    ? self::toUtf8('Restam ' . (int) ($migrateResult['pending'] ?? 0) . ' migrations — rode novamente em Configurações > Update.')
+                    : self::toUtf8((string) ($migrateResult['error'] ?? '')),
+            ];
+            if (! ($migrateResult['ok'] ?? false) || ($migrateResult['partial'] ?? false)) {
+                $msg = self::withDockerManualHint(
+                    ($migrateResult['partial'] ?? false)
+                        ? 'Atualização de arquivos OK, mas migrations incompletas. Vá em Configurações > Update > Rodar migrations.'
+                        : ((string) ($migrateResult['error'] ?? 'Falha nas migrations.'))
+                );
+                if ($request->wantsJson()) {
+                    return response()->json(['success' => false, 'message' => $msg, 'steps' => $steps], 422);
+                }
+
+                return redirect()->route('settings.index', ['tab' => 'update'])->with('error', $msg);
+            }
         } catch (\Throwable $e) {
             $msg = self::withDockerManualHint('Falha nas migrations: ' . self::toUtf8($e->getMessage()));
             if ($request->wantsJson()) {
@@ -710,6 +770,13 @@ class UpdateController extends Controller
             \Illuminate\Support\Facades\Artisan::call('config:cache');
         } catch (\Throwable $e) {
             // Non-fatal
+        }
+
+        if (DockerSetupState::isDocker()) {
+            try {
+                \Illuminate\Support\Facades\Artisan::call('queue:restart');
+            } catch (\Throwable) {
+            }
         }
 
         if ($request->wantsJson()) {

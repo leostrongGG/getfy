@@ -18,6 +18,9 @@ class SendCampaignEmailJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    /** Pausa automática após N falhas consecutivas na campanha. */
+    private const AUTO_PAUSE_FAILURE_THRESHOLD = 5;
+
     public function __construct(
         public int $emailCampaignId,
         public string $email,
@@ -32,6 +35,15 @@ class SendCampaignEmailJob implements ShouldQueue
             return;
         }
 
+        $existing = EmailCampaignSend::query()
+            ->where('email_campaign_id', $campaign->id)
+            ->where('email', $this->email)
+            ->first();
+
+        if ($existing?->status === EmailCampaignSend::STATUS_SENT) {
+            return;
+        }
+
         $mailConfig->applyMailerConfigForTenant($campaign->tenant_id, [], null);
 
         $body = str_replace(
@@ -43,21 +55,90 @@ class SendCampaignEmailJob implements ShouldQueue
         try {
             Mail::mailer('smtp')->to($this->email)->send(new CampaignMail($campaign->subject, $body));
         } catch (\Throwable $e) {
-            Log::warning('SendCampaignEmailJob: falha ao enviar.', [
-                'campaign_id' => $this->emailCampaignId,
-                'email' => $this->email,
-                'message' => $e->getMessage(),
-            ]);
+            $this->recordFailure($campaign, $e);
+
             return;
         }
 
-        EmailCampaignSend::create([
-            'email_campaign_id' => $campaign->id,
-            'user_id' => $this->userId,
+        EmailCampaignSend::updateOrCreate(
+            [
+                'email_campaign_id' => $campaign->id,
+                'email' => $this->email,
+            ],
+            [
+                'user_id' => $this->userId,
+                'status' => EmailCampaignSend::STATUS_SENT,
+                'error_message' => null,
+                'sent_at' => now(),
+            ]
+        );
+
+        if ($existing?->status !== EmailCampaignSend::STATUS_SENT) {
+            $campaign->increment('sent_count');
+        }
+
+        $campaign->update(['last_error' => null]);
+    }
+
+    private function recordFailure(EmailCampaign $campaign, \Throwable $e): void
+    {
+        $message = $e->getMessage();
+
+        Log::warning('SendCampaignEmailJob: falha ao enviar.', [
+            'campaign_id' => $this->emailCampaignId,
             'email' => $this->email,
-            'sent_at' => now(),
+            'message' => $message,
         ]);
 
-        $campaign->increment('sent_count');
+        EmailCampaignSend::updateOrCreate(
+            [
+                'email_campaign_id' => $campaign->id,
+                'email' => $this->email,
+            ],
+            [
+                'user_id' => $this->userId,
+                'status' => EmailCampaignSend::STATUS_FAILED,
+                'error_message' => mb_substr($message, 0, 2000),
+                'sent_at' => null,
+            ]
+        );
+
+        $recentFailures = EmailCampaignSend::query()
+            ->where('email_campaign_id', $campaign->id)
+            ->where('status', EmailCampaignSend::STATUS_FAILED)
+            ->where('updated_at', '>=', now()->subMinutes(10))
+            ->count();
+
+        $shouldAutoPause = $this->isRateLimitError($e)
+            || $recentFailures >= self::AUTO_PAUSE_FAILURE_THRESHOLD;
+
+        if ($shouldAutoPause && $campaign->isSending()) {
+            $reason = $this->isRateLimitError($e)
+                ? 'Limite de envio do provedor atingido. Campanha pausada automaticamente.'
+                : 'Muitas falhas consecutivas. Campanha pausada automaticamente.';
+
+            $campaign->update([
+                'status' => EmailCampaign::STATUS_PAUSED,
+                'paused_at' => now(),
+                'last_error' => $reason . ' Detalhe: ' . mb_substr($message, 0, 500),
+            ]);
+        } else {
+            $campaign->update([
+                'last_error' => mb_substr($message, 0, 500),
+            ]);
+        }
+    }
+
+    private function isRateLimitError(\Throwable $e): bool
+    {
+        $msg = strtolower($e->getMessage());
+
+        foreach (['rate limit', 'too many', '429', 'throttl', '550 5.4.6', '451 4.7.1', '421 4.7.0', 'exceeded'] as $needle) {
+            if (str_contains($msg, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

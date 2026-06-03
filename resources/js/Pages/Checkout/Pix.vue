@@ -6,12 +6,16 @@ import QrcodeVue from 'qrcode.vue';
 import { Clock, Copy, Check, Building2, QrCode, CircleDollarSign } from 'lucide-vue-next';
 import confetti from 'canvas-confetti';
 import ConversionPixels from '@/components/checkout/ConversionPixels.vue';
-import { redirectAfterPurchaseReady } from '@/composables/useConversionPurchase';
+import { firePurchaseWhenReady, redirectAfterPurchaseReady } from '@/composables/useConversionPurchase';
+import {
+    shouldFirePurchaseOnPixGeneration,
+} from '@/lib/pixelPlatforms';
 
 defineOptions({ layout: null });
 
 const conversionPixelsRef = ref(null);
 const pixelsReady = ref(false);
+const pixGenerationPurchaseFired = ref(false);
 /** Payload de Purchase pendente após aprovação (polling). */
 const pendingPurchasePayload = ref(null);
 /** URL para redirecionar após disparar Purchase. */
@@ -77,6 +81,30 @@ const timerDisplay = computed(() => {
     return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
 });
 
+const pixelTrackingContext = computed(() => ({
+    checkout_slug: props.checkout_slug ?? '',
+    product_name: props.product_name ?? '',
+    page_path: typeof window !== 'undefined' ? window.location.pathname : '',
+}));
+
+async function firePixGenerationEvents() {
+    if (pixGenerationPurchaseFired.value) return;
+    const api = conversionPixelsRef.value;
+    if (!api) return;
+
+    api.firePaymentGenerated?.('pix', props.amount, 'BRL', String(props.order_id), pixelTrackingContext.value);
+
+    if (shouldFirePurchaseOnPixGeneration(props.conversion_pixels)) {
+        const payload = buildPurchasePayloadFromStatus({});
+        await firePurchaseWhenReady(api, payload, {
+            maxWaitMs: 3000,
+            triggerType: 'pix',
+            pixels: props.conversion_pixels,
+        });
+    }
+    pixGenerationPurchaseFired.value = true;
+}
+
 const timerExpired = computed(() => timeLeft.value <= 0);
 const hasCustomerInfo = computed(
     () => (props.customer_name || '') !== '' || (props.customer_email || '') !== '' || (props.customer_phone || '') !== ''
@@ -121,6 +149,8 @@ async function flushPurchaseAndRedirect() {
         await redirectAfterPurchaseReady(api, payload, () => navigateToUrl(url), {
             maxWaitMs: 3000,
             redirectDelayMs: 0,
+            triggerType: 'approved',
+            pixels: props.conversion_pixels,
         });
         return;
     }
@@ -150,6 +180,11 @@ async function checkOrderStatus() {
 
 function onConversionPixelsReady() {
     pixelsReady.value = true;
+    const api = conversionPixelsRef.value;
+    if (api?.firePageView) {
+        api.firePageView(props.amount, 'BRL');
+    }
+    firePixGenerationEvents();
     if (redirectAfterFiring.value) {
         flushPurchaseAndRedirect();
     }
@@ -203,7 +238,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-    <ConversionPixels ref="conversionPixelsRef" :pixels="props.conversion_pixels" @ready="onConversionPixelsReady" />
+    <ConversionPixels
+        ref="conversionPixelsRef"
+        :pixels="props.conversion_pixels"
+        :tracking-context="pixelTrackingContext"
+        @ready="onConversionPixelsReady"
+    />
     <Head>
         <title>Pagamento PIX</title>
     </Head>

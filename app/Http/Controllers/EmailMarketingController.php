@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Mail\CampaignMail;
 use App\Models\EmailCampaign;
+use App\Models\EmailCampaignSend;
 use App\Models\Product;
 use App\Services\EmailCampaignRecipientsService;
 use App\Services\TenantMailConfigService;
@@ -31,6 +32,9 @@ class EmailMarketingController extends Controller
         $cloudMode = config('getfy.cloud_mode', false);
 
         $campaigns = EmailCampaign::forTenant($tenantId)
+            ->withCount([
+                'emailCampaignSends as failed_count' => fn ($q) => $q->where('status', EmailCampaignSend::STATUS_FAILED),
+            ])
             ->orderByDesc('created_at')
             ->get()
             ->map(fn (EmailCampaign $c) => [
@@ -40,7 +44,10 @@ class EmailMarketingController extends Controller
                 'status' => $c->status,
                 'total_recipients' => $c->total_recipients,
                 'sent_count' => $c->sent_count,
+                'failed_count' => (int) ($c->failed_count ?? 0),
                 'sent_at' => $c->sent_at?->toIso8601String(),
+                'paused_at' => $c->paused_at?->toIso8601String(),
+                'last_error' => $c->last_error,
                 'created_at' => $c->created_at->toIso8601String(),
             ])
             ->values()
@@ -256,6 +263,62 @@ class EmailMarketingController extends Controller
         ]);
 
         return redirect()->route('email-marketing.index')->with('success', 'Campanha iniciada. Os e-mails serão enviados em lotes de 30 por minuto.');
+    }
+
+    public function pause(EmailCampaign $campaign): RedirectResponse
+    {
+        $tenantId = auth()->user()->tenant_id;
+        if ($campaign->tenant_id !== $tenantId || ! $campaign->canPause()) {
+            abort(404);
+        }
+
+        $campaign->update([
+            'status' => EmailCampaign::STATUS_PAUSED,
+            'paused_at' => now(),
+        ]);
+
+        return redirect()->route('email-marketing.index')->with('success', 'Campanha pausada. Nenhum novo e-mail será enfileirado.');
+    }
+
+    public function resume(Request $request, EmailCampaign $campaign): RedirectResponse
+    {
+        $tenantId = auth()->user()->tenant_id;
+        if ($campaign->tenant_id !== $tenantId || ! $campaign->canResume()) {
+            abort(404);
+        }
+
+        if ($request->boolean('retry_failures')) {
+            $campaign->emailCampaignSends()
+                ->where('status', EmailCampaignSend::STATUS_FAILED)
+                ->delete();
+        }
+
+        $campaign->update([
+            'status' => EmailCampaign::STATUS_SENDING,
+            'paused_at' => null,
+            'last_error' => null,
+        ]);
+
+        $message = $request->boolean('retry_failures')
+            ? 'Campanha retomada. Falhas anteriores serão reenviadas.'
+            : 'Campanha retomada. O envio continuará de onde parou.';
+
+        return redirect()->route('email-marketing.index')->with('success', $message);
+    }
+
+    public function cancel(EmailCampaign $campaign): RedirectResponse
+    {
+        $tenantId = auth()->user()->tenant_id;
+        if ($campaign->tenant_id !== $tenantId || ! $campaign->canCancel()) {
+            abort(404);
+        }
+
+        $campaign->update([
+            'status' => EmailCampaign::STATUS_CANCELLED,
+            'paused_at' => now(),
+        ]);
+
+        return redirect()->route('email-marketing.index')->with('success', 'Campanha cancelada. Nenhum e-mail pendente será enviado.');
     }
 
     /**
