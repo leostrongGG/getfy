@@ -13,7 +13,7 @@ const props = defineProps({
     cinemaMode: { type: Boolean, default: false },
     autoplayVideo: { type: Boolean, default: false },
     nextOverlayVisible: { type: Boolean, default: false },
-    nextLesson: { type: Object, default: null },
+    nextTarget: { type: Object, default: null },
     nextCountdown: { type: Number, default: 5 },
     nextCountdownTotal: { type: Number, default: 5 },
 });
@@ -81,7 +81,7 @@ const showPdfDownloadsInContent = computed(() => {
                 />
                 <MemberLessonNextOverlay
                     :visible="nextOverlayVisible"
-                    :next-lesson="nextLesson"
+                    :next-target="nextTarget"
                     :countdown="nextCountdown"
                     :total-seconds="nextCountdownTotal"
                     @play-now="emit('play-next')"

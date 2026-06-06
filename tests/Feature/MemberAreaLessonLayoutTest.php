@@ -234,4 +234,71 @@ class MemberAreaLessonLayoutTest extends TestCase
             ->where('module.thumbnail', '/storage/'.$path)
         );
     }
+
+    public function test_module_content_includes_next_module_on_last_lesson(): void
+    {
+        $this->withoutMiddleware(EnsureInstalled::class);
+
+        $slug = 'nextmod'.substr(uniqid('', true), -6);
+        $product = $this->createTestProduct([
+            'type' => Product::TYPE_AREA_MEMBROS,
+            'checkout_slug' => $slug,
+        ]);
+
+        $section = MemberSection::create([
+            'product_id' => $product->id,
+            'title' => 'Cursos',
+            'position' => 1,
+            'section_type' => 'courses',
+        ]);
+
+        $moduleA = MemberModule::create([
+            'member_section_id' => $section->id,
+            'product_id' => $product->id,
+            'title' => 'Módulo A',
+            'position' => 1,
+        ]);
+
+        $moduleB = MemberModule::create([
+            'member_section_id' => $section->id,
+            'product_id' => $product->id,
+            'title' => 'Módulo B',
+            'position' => 2,
+        ]);
+
+        $lessonA = MemberLesson::create([
+            'member_module_id' => $moduleA->id,
+            'product_id' => $product->id,
+            'title' => 'Única A',
+            'position' => 1,
+            'type' => MemberLesson::TYPE_TEXT,
+            'content_text' => '<p>A</p>',
+        ]);
+
+        $lessonB = MemberLesson::create([
+            'member_module_id' => $moduleB->id,
+            'product_id' => $product->id,
+            'title' => 'Primeira B',
+            'position' => 1,
+            'type' => MemberLesson::TYPE_TEXT,
+            'content_text' => '<p>B</p>',
+        ]);
+
+        $aluno = User::factory()->create([
+            'role' => User::ROLE_ALUNO,
+            'tenant_id' => 1,
+        ]);
+        $product->users()->attach($aluno->id);
+
+        $response = $this->actingAs($aluno)->get('/m/'.$slug.'/modulo/'.$moduleA->id.'?aula='.$lessonA->id);
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->where('lesson_navigation.next', null)
+            ->where('lesson_navigation.next_module.id', $moduleB->id)
+            ->where('lesson_navigation.next_module.first_lesson_id', $lessonB->id)
+            ->where('next_modules.0.id', $moduleB->id)
+            ->where('next_modules.0.first_lesson.id', $lessonB->id)
+        );
+    }
 }

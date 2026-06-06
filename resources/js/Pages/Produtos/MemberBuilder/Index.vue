@@ -25,6 +25,7 @@ import {
     Bell,
     Plus,
     Trash2,
+    Copy,
     ChevronDown,
     ExternalLink,
     X,
@@ -169,6 +170,10 @@ function deleteSection(sectionId) {
     if (!confirm('Remover esta seção e todo o conteúdo?')) return;
     router.delete(`${base.value}/sections/${sectionId}`, { preserveScroll: true });
 }
+function duplicateSection(sectionId) {
+    if (!confirm('Duplicar esta seção com módulos e aulas?')) return;
+    router.post(`${base.value}/sections/${sectionId}/duplicate`, {}, { preserveScroll: true });
+}
 function addModule(sectionId) {
     const title = prompt('Título do módulo:');
     if (!title) return;
@@ -178,6 +183,10 @@ function deleteModule(moduleId) {
     if (!confirm('Remover este módulo e todas as aulas?')) return;
     router.delete(`${base.value}/modules/${moduleId}`, { preserveScroll: true });
 }
+function duplicateModule(moduleId) {
+    if (!confirm('Duplicar este módulo e suas aulas?')) return;
+    router.post(`${base.value}/modules/${moduleId}/duplicate`, {}, { preserveScroll: true });
+}
 function addLesson(moduleId) {
     const title = prompt('Título da aula:');
     if (!title) return;
@@ -186,6 +195,10 @@ function addLesson(moduleId) {
 function deleteLesson(lessonId) {
     if (!confirm('Remover esta aula?')) return;
     router.delete(`${base.value}/lessons/${lessonId}`, { preserveScroll: true });
+}
+function duplicateLesson(lessonId) {
+    if (!confirm('Duplicar esta aula?')) return;
+    router.post(`${base.value}/lessons/${lessonId}/duplicate`, {}, { preserveScroll: true });
 }
 function addInternalProduct() {
     const id = prompt('ID do produto relacionado:');
@@ -383,6 +396,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                 <span class="text-sm font-medium">{{ section.title }}</span>
                                 <div class="flex gap-1">
                                     <Button size="sm" variant="outline" @click="addModule(section.id)">+ Módulo</Button>
+                                    <button type="button" class="p-1 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200" title="Duplicar seção" @click="duplicateSection(section.id)"><Copy class="h-4 w-4" /></button>
                                     <button type="button" class="p-1 text-red-600 hover:underline" @click="deleteSection(section.id)"><Trash2 class="h-4 w-4" /></button>
                                 </div>
                             </div>
@@ -391,12 +405,16 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                     <span class="text-xs">{{ mod.title }}</span>
                                     <div class="flex gap-1">
                                         <Button size="sm" variant="outline" class="!py-1 !text-xs" @click="addLesson(mod.id)">+ Aula</Button>
+                                        <button type="button" class="text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200" title="Duplicar módulo" @click="duplicateModule(mod.id)"><Copy class="h-3 w-3" /></button>
                                         <button type="button" class="text-red-600 hover:underline" @click="deleteModule(mod.id)"><Trash2 class="h-3 w-3" /></button>
                                     </div>
                                 </div>
                                 <div v-for="lesson in mod.lessons" :key="lesson.id" class="flex items-center justify-between py-0.5 pl-2 text-xs text-zinc-500">
                                     <span>— {{ lesson.title }}</span>
-                                    <button type="button" class="text-red-600 hover:underline" @click="deleteLesson(lesson.id)"><Trash2 class="h-3 w-3" /></button>
+                                    <div class="flex gap-1">
+                                        <button type="button" class="text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200" title="Duplicar aula" @click="duplicateLesson(lesson.id)"><Copy class="h-3 w-3" /></button>
+                                        <button type="button" class="text-red-600 hover:underline" @click="deleteLesson(lesson.id)"><Trash2 class="h-3 w-3" /></button>
+                                    </div>
                                 </div>
                             </div>
                         </div>

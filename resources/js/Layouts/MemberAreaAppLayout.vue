@@ -6,8 +6,10 @@ import MemberAreaNotificationsPanel from '@/components/member-area/MemberAreaNot
 import Button from '@/components/ui/Button.vue';
 import { Bell, ChevronDown, User, X, Camera, Lock, CheckCircle, AlertCircle, Menu, Trophy, RotateCcw, ShoppingCart } from 'lucide-vue-next';
 import { ensurePushSubscription, attachServiceWorkerPushListeners } from '@/lib/pushSubscription';
+import { useMemberAreaCinemaMode } from '@/composables/useMemberAreaCinemaMode.js';
 
 const page = usePage();
+const { cinemaMode } = useMemberAreaCinemaMode();
 const props = computed(() => page.props);
 const product = computed(() => props.value?.product ?? {});
 const config = computed(() => props.value?.config ?? {});
@@ -521,6 +523,10 @@ watch(
     (v) => { if (v !== undefined) memberNotificationsUnreadCount.value = v; },
     { immediate: true }
 );
+
+watch(cinemaMode, (active) => {
+    if (active) closeMobileMenu();
+});
 </script>
 
 <template>
@@ -542,7 +548,8 @@ watch(
     >
         <!-- Header: logo/nav à esquerda, conta e notificações à direita; overflow-visible para dropdowns não serem cortados -->
         <header
-            class="fixed left-0 right-0 top-0 z-30 flex h-14 items-center justify-between gap-4 overflow-visible px-4 transition-[background] duration-300 print:hidden md:px-6"
+            v-show="!cinemaMode"
+            class="fixed left-0 right-0 top-0 z-30 flex h-14 items-center justify-between gap-4 overflow-visible px-4 transition-[transform,opacity,background] duration-300 print:hidden md:px-6"
             :class="[headerScrolled ? 'bg-black/30 backdrop-blur-md' : 'bg-transparent']"
             :style="{ color: 'var(--ma-text)' }"
         >
@@ -913,8 +920,12 @@ watch(
             </div>
         </Teleport>
 
-        <div class="min-h-screen pt-14 print:pt-0" :style="{ backgroundColor: 'var(--ma-bg)', color: 'var(--ma-text)' }">
-            <main class="px-6 pb-6 print:p-0">
+        <div
+            class="min-h-screen print:pt-0"
+            :class="cinemaMode ? 'pt-0' : 'pt-14'"
+            :style="{ backgroundColor: 'var(--ma-bg)', color: 'var(--ma-text)' }"
+        >
+            <main class="print:p-0" :class="cinemaMode ? 'px-2 pb-4 pt-1 sm:px-3' : 'px-6 pb-6'">
                 <slot />
             </main>
         </div>

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue';
 import { Link } from '@inertiajs/vue3';
-import { CheckCircle, Lock, Search, X } from 'lucide-vue-next';
+import { CheckCircle, Lock, Search, X, ChevronRight } from 'lucide-vue-next';
 
 const props = defineProps({
     module: { type: Object, required: true },
@@ -15,6 +15,8 @@ const props = defineProps({
     },
     isLessonCompleted: { type: Function, required: true },
     lessonUrl: { type: Function, required: true },
+    moduleLessonUrl: { type: Function, default: null },
+    nextModules: { type: Array, default: () => [] },
     mobile: { type: Boolean, default: false },
 });
 
@@ -49,6 +51,13 @@ const currentLessonIndex = computed(() => {
 });
 
 const showThumbnail = computed(() => Boolean(props.module.thumbnail) && !thumbnailFailed.value);
+
+function nextModuleHref(mod) {
+    if (typeof props.moduleLessonUrl === 'function' && mod?.first_lesson?.id) {
+        return props.moduleLessonUrl(mod.id, mod.first_lesson.id);
+    }
+    return `/m/${props.slug}/modulo/${mod.id}`;
+}
 </script>
 
 <template>
@@ -164,5 +173,47 @@ const showThumbnail = computed(() => Boolean(props.module.thumbnail) && !thumbna
             <p v-else-if="lessons.length" class="px-3 py-6 text-center text-sm text-zinc-500">Nenhuma aula encontrada.</p>
             <p v-else class="px-3 py-6 text-center text-sm text-zinc-500">Nenhuma aula neste módulo.</p>
         </nav>
+
+        <div
+            v-if="nextModules.length"
+            class="shrink-0 border-t border-white/5 px-2 pb-3 pt-2"
+        >
+            <p class="px-2 pb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                Próximos módulos
+            </p>
+            <div class="space-y-1">
+                <Link
+                    v-for="mod in nextModules"
+                    :key="mod.id"
+                    :href="nextModuleHref(mod)"
+                    class="group flex items-center gap-2.5 rounded-xl px-2 py-2 transition hover:bg-white/5"
+                    @click="mobile && emit('close')"
+                >
+                    <div class="relative h-11 w-16 shrink-0 overflow-hidden rounded-lg bg-zinc-800">
+                        <img
+                            v-if="mod.thumbnail"
+                            :src="mod.thumbnail"
+                            :alt="mod.title"
+                            class="h-full w-full object-cover transition group-hover:scale-[1.03]"
+                        />
+                        <div v-else class="flex h-full items-center justify-center">
+                            <ChevronRight class="h-4 w-4 text-zinc-600" />
+                        </div>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <p v-if="mod.section_title" class="truncate text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                            {{ mod.section_title }}
+                        </p>
+                        <p class="truncate text-sm font-medium text-zinc-200 group-hover:text-white">
+                            {{ mod.title }}
+                        </p>
+                        <p v-if="mod.first_lesson?.title" class="truncate text-[11px] text-zinc-500">
+                            {{ mod.first_lesson.title }}
+                        </p>
+                    </div>
+                    <ChevronRight class="h-4 w-4 shrink-0 text-zinc-600 transition group-hover:text-[var(--ma-primary)]" />
+                </Link>
+            </div>
+        </div>
     </div>
 </template>

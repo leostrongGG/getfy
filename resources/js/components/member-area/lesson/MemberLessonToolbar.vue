@@ -17,9 +17,10 @@ const props = defineProps({
     userNote: { type: String, default: '' },
     navigation: {
         type: Object,
-        default: () => ({ prev: null, next: null }),
+        default: () => ({ prev: null, next: null, next_module: null }),
     },
     lessonUrl: { type: Function, required: true },
+    moduleLessonUrl: { type: Function, default: null },
     showLessonsButton: { type: Boolean, default: false },
 });
 
@@ -116,7 +117,7 @@ async function saveNote() {
                     Aulas
                 </button>
 
-                <label class="hidden h-8 cursor-pointer select-none items-center gap-2 rounded-lg bg-zinc-800/60 px-2.5 lg:flex">
+                <label class="inline-flex h-8 cursor-pointer select-none items-center gap-2 rounded-lg bg-zinc-800/60 px-2.5">
                     <span class="text-xs font-medium text-zinc-400">Modo cinema</span>
                     <button
                         type="button"
@@ -199,6 +200,14 @@ async function saveNote() {
                     class="inline-flex max-w-[11rem] items-center gap-1.5 rounded-lg bg-zinc-800/50 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
                 >
                     <span class="truncate">{{ navigation.next.title }}</span>
+                    <ChevronRight class="h-3.5 w-3.5 shrink-0 text-[var(--ma-primary)]" />
+                </Link>
+                <Link
+                    v-else-if="navigation.next_module && moduleLessonUrl"
+                    :href="moduleLessonUrl(navigation.next_module.id, navigation.next_module.first_lesson_id)"
+                    class="inline-flex max-w-[12rem] items-center gap-1.5 rounded-lg bg-zinc-800/50 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
+                >
+                    <span class="truncate">{{ navigation.next_module.title }}</span>
                     <ChevronRight class="h-3.5 w-3.5 shrink-0 text-[var(--ma-primary)]" />
                 </Link>
                 <span

@@ -250,7 +250,8 @@ class MemberAreaAppController extends Controller
         }
 
         $progressPercent = $this->progressService->completionPercent($product, $user);
-        $lessonNavigation = $this->lessonNavigationPayload($effectiveModule, $currentLesson, $accessStartAt, $now);
+        $nextModules = $this->nextModulesPayload($product, $module, $user, $accessStartAt, $now);
+        $lessonNavigation = $this->lessonNavigationPayload($effectiveModule, $currentLesson, $accessStartAt, $now, $nextModules);
 
         $sections = $product->memberSections()->with('modules')->orderBy('position')->get();
         $sectionsPayload = $sections->map(fn (MemberSection $s) => [
@@ -305,6 +306,7 @@ class MemberAreaAppController extends Controller
             'lessons' => $lessons,
             'current_lesson' => $currentLessonData,
             'lesson_navigation' => $lessonNavigation,
+            'next_modules' => $nextModules,
             'progress_percent' => $progressPercent,
             'course_lesson_progress' => [
                 'completed' => $this->progressService->completedLessonsCount($product, $user),
@@ -1861,12 +1863,105 @@ class MemberAreaAppController extends Controller
     }
 
     /**
-     * @return array{prev: array{id: int, title: string}|null, next: array{id: int, title: string}|null}
+     * @return list<array{id: int, title: string, thumbnail: ?string, section_title: ?string, first_lesson: array{id: int, title: string}}>
      */
-    private function lessonNavigationPayload(MemberModule $module, ?MemberLesson $currentLesson, Carbon $accessStartAt, Carbon $now): array
+    private function nextModulesPayload(Product $product, MemberModule $currentRouteModule, User $user, Carbon $accessStartAt, Carbon $now, int $limit = 6): array
+    {
+        $sections = $product->memberSections()
+            ->with(['modules' => fn ($q) => $q->orderBy('position')])
+            ->orderBy('position')
+            ->get();
+
+        $flat = [];
+        foreach ($sections as $section) {
+            foreach ($section->modules as $routeModule) {
+                $flat[] = ['module' => $routeModule, 'section' => $section];
+            }
+        }
+
+        $currentIndex = null;
+        foreach ($flat as $i => $item) {
+            if ((int) $item['module']->id === (int) $currentRouteModule->id) {
+                $currentIndex = $i;
+                break;
+            }
+        }
+
+        if ($currentIndex === null) {
+            return [];
+        }
+
+        $result = [];
+        for ($i = $currentIndex + 1; $i < count($flat) && count($result) < $limit; $i++) {
+            $routeModule = $flat[$i]['module'];
+            $section = $flat[$i]['section'];
+
+            if (! $this->userCanAccessRouteModule($routeModule, $user)) {
+                continue;
+            }
+
+            $lock = $this->moduleLockPayload($routeModule, $accessStartAt, $now);
+            if (($lock['is_locked'] ?? false) === true) {
+                continue;
+            }
+
+            $effective = $this->resolveContentModuleForWrapper($routeModule);
+            $firstLesson = $effective->lessons->first(function (MemberLesson $lesson) use ($effective, $accessStartAt, $now) {
+                return ($this->lessonLockPayload($lesson, $effective, $accessStartAt, $now)['is_locked'] ?? false) !== true;
+            });
+
+            if (! $firstLesson) {
+                continue;
+            }
+
+            $result[] = [
+                'id' => $routeModule->id,
+                'title' => $routeModule->title,
+                'thumbnail' => $this->moduleThumbnailUrl($routeModule, $product, $effective),
+                'section_title' => $section->title,
+                'first_lesson' => [
+                    'id' => $firstLesson->id,
+                    'title' => $firstLesson->title,
+                ],
+            ];
+        }
+
+        return $result;
+    }
+
+    private function userCanAccessRouteModule(MemberModule $routeModule, User $user): bool
+    {
+        if (! $routeModule->related_product_id) {
+            return true;
+        }
+
+        $relatedFkIds = array_values(array_unique(array_filter(
+            [(string) $routeModule->related_product_id, is_numeric($routeModule->related_product_id) ? (int) $routeModule->related_product_id : null],
+            static fn ($v) => $v !== null && $v !== ''
+        )));
+
+        $hasAccess = $user->products()->whereIn('products.id', $relatedFkIds)->exists();
+        if (($routeModule->access_type ?? 'paid') === 'paid' && ! $hasAccess) {
+            return false;
+        }
+
+        $related = Product::query()->whereIn('id', $relatedFkIds)->first();
+
+        return $related?->type !== Product::TYPE_LINK;
+    }
+
+    /**
+     * @param  list<array{id: int, title: string, thumbnail: ?string, section_title: ?string, first_lesson: array{id: int, title: string}}>  $nextModules
+     * @return array{
+     *     prev: array{id: int, title: string}|null,
+     *     next: array{id: int, title: string}|null,
+     *     next_module: array{id: int, title: string, first_lesson_id: int, first_lesson_title: string}|null
+     * }
+     */
+    private function lessonNavigationPayload(MemberModule $module, ?MemberLesson $currentLesson, Carbon $accessStartAt, Carbon $now, array $nextModules = []): array
     {
         if (! $currentLesson) {
-            return ['prev' => null, 'next' => null];
+            return ['prev' => null, 'next' => null, 'next_module' => null];
         }
 
         $unlocked = $module->lessons->filter(function (MemberLesson $lesson) use ($module, $accessStartAt, $now) {
@@ -1875,7 +1970,7 @@ class MemberAreaAppController extends Controller
 
         $index = $unlocked->search(fn (MemberLesson $lesson) => $lesson->id === $currentLesson->id);
         if ($index === false) {
-            return ['prev' => null, 'next' => null];
+            return ['prev' => null, 'next' => null, 'next_module' => null];
         }
 
         $prev = null;
@@ -1889,7 +1984,18 @@ class MemberAreaAppController extends Controller
             $next = ['id' => $n->id, 'title' => $n->title];
         }
 
-        return ['prev' => $prev, 'next' => $next];
+        $nextModule = null;
+        if ($next === null && $nextModules !== []) {
+            $first = $nextModules[0];
+            $nextModule = [
+                'id' => $first['id'],
+                'title' => $first['title'],
+                'first_lesson_id' => $first['first_lesson']['id'],
+                'first_lesson_title' => $first['first_lesson']['title'],
+            ];
+        }
+
+        return ['prev' => $prev, 'next' => $next, 'next_module' => $nextModule];
     }
 
     private function isLessonCompleted(int $userId, int $lessonId): bool

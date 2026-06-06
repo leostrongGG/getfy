@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button.vue';
 import MemberBuilderLessonEditor from '@/components/member-builder/MemberBuilderLessonEditor.vue';
 import MemberBuilderModuleEditor from '@/components/member-builder/MemberBuilderModuleEditor.vue';
 import {
-    Plus, Trash2, GripVertical, Pencil, FolderOpen, BookOpen, ChevronLeft, PanelRightClose, PanelRight,
+    Plus, Trash2, GripVertical, Pencil, FolderOpen, BookOpen, ChevronLeft, PanelRightClose, PanelRight, Copy,
 } from 'lucide-vue-next';
 
 const sections = defineModel('sections', { type: Array, default: () => [] });
@@ -45,7 +45,9 @@ const emit = defineEmits([
     'open-section-modal',
     'open-module-modal',
     'delete-section',
+    'duplicate-section',
     'delete-module',
+    'duplicate-module',
     'sections-reorder-end',
     'modules-reorder-end',
     'lessons-reorder-end',
@@ -58,6 +60,7 @@ const emit = defineEmits([
     'close-lesson-form',
     'save-lesson',
     'delete-lesson',
+    'duplicate-lesson',
     'pick-lesson-pdf',
     'pick-support-pdf',
     'pick-module-thumbnail',
@@ -251,6 +254,9 @@ const columnClass = (step) => [
                                 <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-700" @click.stop="emit('edit-section', section)">
                                     <Pencil class="h-3 w-3" />
                                 </button>
+                                <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-700" title="Duplicar seção" @click.stop="emit('duplicate-section', section.id)">
+                                    <Copy class="h-3 w-3" />
+                                </button>
                                 <button type="button" class="rounded p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" @click.stop="emit('delete-section', section.id)">
                                     <Trash2 class="h-3 w-3" />
                                 </button>
@@ -323,6 +329,9 @@ const columnClass = (step) => [
                             >
                                 <Pencil class="h-3 w-3" />
                             </button>
+                            <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-300" title="Duplicar módulo" @click.stop="emit('duplicate-module', mod.id)">
+                                <Copy class="h-3 w-3" />
+                            </button>
                             <button type="button" class="rounded p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" @click.stop="emit('delete-module', mod.id)">
                                 <Trash2 class="h-3 w-3" />
                             </button>
@@ -377,6 +386,7 @@ const columnClass = (step) => [
                         @close-lesson-form="emit('close-lesson-form')"
                         @save-lesson="emit('save-lesson')"
                         @delete-lesson="emit('delete-lesson', $event)"
+                        @duplicate-lesson="emit('duplicate-lesson', $event)"
                         @lessons-reorder-end="emit('lessons-reorder-end')"
                         @pick-lesson-pdf="emit('pick-lesson-pdf')"
                         @pick-support-pdf="emit('pick-support-pdf')"

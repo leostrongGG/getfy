@@ -1458,6 +1458,50 @@ async function deleteSection(sectionId) {
         },
     });
 }
+
+function findSectionByModuleId(moduleId) {
+    if (!moduleId) return null;
+    return courseStructureSections.value?.find((s) => s.modules?.some((m) => m.id === moduleId)) ?? null;
+}
+
+function findModuleByLessonId(lessonId) {
+    if (!lessonId) return null;
+    for (const section of courseStructureSections.value ?? []) {
+        const module = section.modules?.find((m) => m.lessons?.some((l) => l.id === lessonId));
+        if (module) return { section, module };
+    }
+    return null;
+}
+
+async function duplicateSection(sectionId) {
+    openConfirmModal({
+        title: 'Duplicar seção',
+        message: 'Criar uma cópia desta seção com módulos e aulas?',
+        confirmLabel: 'Duplicar',
+        danger: false,
+        onConfirm: async () => {
+            const { data } = await axios.post(
+                `${base.value}/sections/${sectionId}/duplicate`,
+                {},
+                { headers: headers() },
+            );
+            const newSection = data?.section;
+            if (!newSection) {
+                reload();
+                return;
+            }
+            const idx = courseStructureSections.value.findIndex((s) => s.id === sectionId);
+            if (idx >= 0) {
+                courseStructureSections.value.splice(idx + 1, 0, newSection);
+            } else {
+                courseStructureSections.value.push(newSection);
+            }
+            modulosSelectedSectionId.value = newSection.id;
+            modulosSelectedModuleId.value = null;
+            previewKey.value++;
+        },
+    });
+}
 function openModuleModal(sectionId) {
     const section = courseStructureSections.value?.find((s) => s.id === sectionId)
         ?? props.produto.sections?.find((s) => s.id === sectionId);
@@ -1577,6 +1621,42 @@ async function deleteModule(moduleId) {
         },
     });
 }
+
+async function duplicateModule(moduleId) {
+    openConfirmModal({
+        title: 'Duplicar módulo',
+        message: 'Criar uma cópia deste módulo e das aulas?',
+        confirmLabel: 'Duplicar',
+        danger: false,
+        onConfirm: async () => {
+            const { data } = await axios.post(
+                `${base.value}/modules/${moduleId}/duplicate`,
+                {},
+                { headers: headers() },
+            );
+            const newModule = data?.module;
+            if (!newModule) {
+                reload();
+                return;
+            }
+            const section = findSectionByModuleId(moduleId);
+            if (!section) {
+                reload();
+                return;
+            }
+            if (!section.modules) section.modules = [];
+            const idx = section.modules.findIndex((m) => m.id === moduleId);
+            if (idx >= 0) {
+                section.modules.splice(idx + 1, 0, newModule);
+            } else {
+                section.modules.push(newModule);
+            }
+            modulosSelectedSectionId.value = section.id;
+            modulosSelectedModuleId.value = newModule.id;
+            previewKey.value++;
+        },
+    });
+}
 async function deleteLesson(lessonId) {
     openConfirmModal({
         title: 'Remover aula',
@@ -1585,6 +1665,43 @@ async function deleteLesson(lessonId) {
         onConfirm: async () => {
             await axios.delete(`${base.value}/lessons/${lessonId}`, { headers: headers() });
             reload();
+        },
+    });
+}
+
+async function duplicateLesson(lessonId) {
+    openConfirmModal({
+        title: 'Duplicar aula',
+        message: 'Criar uma cópia desta aula no mesmo módulo?',
+        confirmLabel: 'Duplicar',
+        danger: false,
+        onConfirm: async () => {
+            const { data } = await axios.post(
+                `${base.value}/lessons/${lessonId}/duplicate`,
+                {},
+                { headers: headers() },
+            );
+            const newLesson = data?.lesson;
+            if (!newLesson) {
+                reload();
+                return;
+            }
+            const located = findModuleByLessonId(lessonId);
+            if (!located) {
+                reload();
+                return;
+            }
+            const { section, module } = located;
+            if (!module.lessons) module.lessons = [];
+            const idx = module.lessons.findIndex((l) => l.id === lessonId);
+            if (idx >= 0) {
+                module.lessons.splice(idx + 1, 0, newLesson);
+            } else {
+                module.lessons.push(newLesson);
+            }
+            modulosSelectedSectionId.value = section.id;
+            modulosSelectedModuleId.value = module.id;
+            previewKey.value++;
         },
     });
 }
@@ -2286,7 +2403,9 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             @open-section-modal="openSectionModal"
                             @open-module-modal="openModuleModal"
                             @delete-section="deleteSection"
+                            @duplicate-section="duplicateSection"
                             @delete-module="deleteModule"
+                            @duplicate-module="duplicateModule"
                             @sections-reorder-end="onMemberSectionsReorderEnd"
                             @modules-reorder-end="onMemberModulesReorderEnd"
                             @lessons-reorder-end="onMemberLessonsReorderEnd"
@@ -2299,6 +2418,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             @close-lesson-form="closeModulosLessonForm"
                             @save-lesson="saveLessonFromSidebar"
                             @delete-lesson="deleteLesson"
+                            @duplicate-lesson="duplicateLesson"
                             @pick-lesson-pdf="lessonPdfFileInput?.click()"
                             @pick-support-pdf="lessonSupportFileInput?.click()"
                             @pick-module-thumbnail="moduleThumbnailFileInput?.click()"

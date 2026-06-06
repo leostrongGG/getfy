@@ -8,6 +8,7 @@ import MemberLessonToolbar from '@/components/member-area/lesson/MemberLessonToo
 import MemberLessonMaterials from '@/components/member-area/lesson/MemberLessonMaterials.vue';
 import MemberLessonComments from '@/components/member-area/lesson/MemberLessonComments.vue';
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next';
+import { useMemberAreaCinemaMode } from '@/composables/useMemberAreaCinemaMode.js';
 
 defineOptions({ layout: MemberAreaAppLayout });
 
@@ -20,8 +21,9 @@ const props = defineProps({
     current_lesson: { type: Object, default: null },
     lesson_navigation: {
         type: Object,
-        default: () => ({ prev: null, next: null }),
+        default: () => ({ prev: null, next: null, next_module: null }),
     },
+    next_modules: { type: Array, default: () => [] },
     progress_percent: { type: Number, default: 0 },
     sections: { type: Array, default: () => [] },
     comments_enabled: { type: Boolean, default: false },
@@ -45,7 +47,7 @@ const courseProgress = computed(() => props.course_lesson_progress || { complete
 const completedLessonIds = ref(new Set());
 const completed = ref(props.current_lesson?.is_completed ?? false);
 const completing = ref(false);
-const cinemaMode = ref(false);
+const { cinemaMode, setCinemaMode, toggleCinemaMode } = useMemberAreaCinemaMode();
 const mobileSidebarOpen = ref(false);
 const NEXT_COUNTDOWN_SECONDS = 5;
 const NEXT_OVERLAY_BEFORE_END_SECONDS = 2;
@@ -65,6 +67,31 @@ const isLessonCompletedFn = (lesson) => lesson.is_completed || completedLessonId
 function lessonUrl(lessonId) {
     return `/m/${props.slug}/modulo/${props.module.id}?aula=${lessonId}`;
 }
+
+function moduleLessonUrl(moduleId, lessonId) {
+    return `/m/${props.slug}/modulo/${moduleId}?aula=${lessonId}`;
+}
+
+const nextAutoTarget = computed(() => {
+    const nav = props.lesson_navigation || {};
+    if (nav.next?.id) {
+        return {
+            kind: 'lesson',
+            url: lessonUrl(nav.next.id),
+            title: nav.next.title,
+        };
+    }
+    const nm = nav.next_module;
+    if (nm?.id && nm?.first_lesson_id) {
+        return {
+            kind: 'module',
+            url: moduleLessonUrl(nm.id, nm.first_lesson_id),
+            title: nm.title,
+            subtitle: nm.first_lesson_title,
+        };
+    }
+    return null;
+});
 
 function markComplete() {
     return new Promise((resolve) => {
@@ -112,22 +139,24 @@ function consumeAutoplayIntent() {
 
 function goToNextLesson() {
     const target = nextLessonTarget.value;
-    if (!target?.id) return;
+    if (!target?.url) return;
     clearNextCountdown();
     try {
-        sessionStorage.setItem(AUTOPLAY_STORAGE_KEY, String(target.id));
+        if (target.lessonId) {
+            sessionStorage.setItem(AUTOPLAY_STORAGE_KEY, String(target.lessonId));
+        }
     } catch (_) {}
-    router.visit(lessonUrl(target.id));
+    router.visit(target.url);
 }
 
-function startNextCountdown(next) {
-    if (nextOverlayTriggered || !next?.id) return;
+function startNextCountdown(target) {
+    if (nextOverlayTriggered || !target?.url) return;
     nextOverlayTriggered = true;
     if (nextCountdownTimer) {
         clearInterval(nextCountdownTimer);
         nextCountdownTimer = null;
     }
-    nextLessonTarget.value = next;
+    nextLessonTarget.value = target;
     nextCountdown.value = NEXT_COUNTDOWN_SECONDS;
     nextOverlayVisible.value = true;
     nextCountdownTimer = setInterval(() => {
@@ -144,18 +173,35 @@ function onCancelNext() {
 }
 
 function maybeShowNextOverlay() {
-    const next = props.lesson_navigation?.next;
-    if (!next) return;
+    const target = nextAutoTarget.value;
+    if (!target) return;
     if (!completed.value && !completing.value) {
         markComplete();
     }
-    startNextCountdown(next);
+    startNextCountdown({
+        kind: target.kind,
+        url: target.url,
+        title: target.title,
+        subtitle: target.subtitle,
+        lessonId: target.kind === 'lesson'
+            ? props.lesson_navigation?.next?.id
+            : props.lesson_navigation?.next_module?.first_lesson_id,
+    });
 }
 
 async function onVideoEnded() {
     await markComplete();
-    if (!nextOverlayTriggered && props.lesson_navigation?.next) {
-        startNextCountdown(props.lesson_navigation.next);
+    if (!nextOverlayTriggered && nextAutoTarget.value) {
+        const t = nextAutoTarget.value;
+        startNextCountdown({
+            kind: t.kind,
+            url: t.url,
+            title: t.title,
+            subtitle: t.subtitle,
+            lessonId: t.kind === 'lesson'
+                ? props.lesson_navigation?.next?.id
+                : props.lesson_navigation?.next_module?.first_lesson_id,
+        });
     }
 }
 
@@ -163,7 +209,7 @@ function onVideoProgress({ percent, currentTime, duration }) {
     if (!completed.value && !completing.value && percent >= VIDEO_AUTO_COMPLETE_PERCENT) {
         markComplete();
     }
-    if (nextOverlayTriggered || !props.lesson_navigation?.next) return;
+    if (nextOverlayTriggered || !nextAutoTarget.value) return;
     if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime)) return;
     const remaining = duration - currentTime;
     if (remaining <= NEXT_OVERLAY_BEFORE_END_SECONDS) {
@@ -202,11 +248,12 @@ watch(() => props.current_lesson?.id, resetLessonState);
 onUnmounted(() => {
     if (autoCompleteTimer) clearTimeout(autoCompleteTimer);
     clearNextCountdown();
+    setCinemaMode(false);
 });
 
 function onKeydown(e) {
     if (e.key === 'Escape' && cinemaMode.value) {
-        cinemaMode.value = false;
+        setCinemaMode(false);
     }
 }
 
@@ -254,7 +301,7 @@ function scrollCarousel(sectionId, direction) {
 </script>
 
 <template>
-    <div class="space-y-8">
+    <div class="space-y-8" :class="cinemaMode && current_lesson ? 'space-y-2' : ''">
         <div
             class="relative flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-8"
             :class="cinemaMode && current_lesson ? 'lg:flex-col' : ''"
@@ -271,7 +318,7 @@ function scrollCarousel(sectionId, direction) {
                             :cinema-mode="cinemaMode"
                             :autoplay-video="shouldAutoplayVideo"
                             :next-overlay-visible="nextOverlayVisible"
-                            :next-lesson="nextLessonTarget"
+                            :next-target="nextLessonTarget"
                             :next-countdown="nextCountdown"
                             :next-countdown-total="NEXT_COUNTDOWN_SECONDS"
                             @ended="onVideoEnded"
@@ -295,8 +342,9 @@ function scrollCarousel(sectionId, direction) {
                         :user-note="current_lesson.user_note ?? ''"
                         :navigation="lesson_navigation"
                         :lesson-url="lessonUrl"
+                        :module-lesson-url="moduleLessonUrl"
                         show-lessons-button
-                        @toggle-cinema="cinemaMode = !cinemaMode"
+                        @toggle-cinema="toggleCinemaMode()"
                         @complete="markComplete"
                         @open-lessons="mobileSidebarOpen = true"
                     />
@@ -334,6 +382,8 @@ function scrollCarousel(sectionId, direction) {
                     :course-progress="courseProgress"
                     :is-lesson-completed="isLessonCompletedFn"
                     :lesson-url="lessonUrl"
+                    :module-lesson-url="moduleLessonUrl"
+                    :next-modules="next_modules"
                 />
             </aside>
         </div>
@@ -357,6 +407,8 @@ function scrollCarousel(sectionId, direction) {
                         :course-progress="courseProgress"
                         :is-lesson-completed="isLessonCompletedFn"
                         :lesson-url="lessonUrl"
+                        :module-lesson-url="moduleLessonUrl"
+                        :next-modules="next_modules"
                         @close="mobileSidebarOpen = false"
                     />
                 </div>

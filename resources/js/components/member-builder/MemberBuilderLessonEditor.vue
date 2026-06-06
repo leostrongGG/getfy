@@ -3,7 +3,7 @@ import Draggable from 'vuedraggable';
 import Button from '@/components/ui/Button.vue';
 import Toggle from '@/components/ui/Toggle.vue';
 import {
-    Plus, Trash2, GripVertical, FileVideo, Link, FileText, BookOpen, Presentation,
+    Plus, Trash2, GripVertical, FileVideo, Link, FileText, BookOpen, Presentation, Copy,
 } from 'lucide-vue-next';
 
 const props = defineProps({
@@ -24,6 +24,7 @@ const emit = defineEmits([
     'close-lesson-form',
     'save-lesson',
     'delete-lesson',
+    'duplicate-lesson',
     'lessons-reorder-end',
     'lesson-pdf-change',
     'clear-lesson-pdf',
@@ -83,6 +84,14 @@ const lessonsModel = defineModel('lessons', { type: Array, default: () => [] });
                             <FileText v-else class="h-4 w-4 shrink-0 text-zinc-500" />
                             <span class="truncate text-zinc-700 dark:text-zinc-300">{{ lesson.title || 'Sem título' }}</span>
                         </span>
+                        <button
+                            type="button"
+                            class="shrink-0 rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
+                            title="Duplicar aula"
+                            @click.stop="emit('duplicate-lesson', lesson.id)"
+                        >
+                            <Copy class="h-3 w-3" />
+                        </button>
                         <button
                             type="button"
                             class="shrink-0 rounded p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"

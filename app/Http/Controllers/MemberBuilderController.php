@@ -599,6 +599,50 @@ class MemberBuilderController extends Controller
         return back()->with('success', 'Seção removida.');
     }
 
+    public function duplicateSection(Request $request, Product $produto, MemberSection $section): JsonResponse|RedirectResponse
+    {
+        $this->authorizeProduct($produto);
+        if ($section->product_id !== $produto->id) {
+            abort(404);
+        }
+
+        $clone = DB::transaction(function () use ($produto, $section) {
+            $newPosition = (int) $section->position + 1;
+            MemberSection::query()
+                ->where('product_id', $produto->id)
+                ->where('position', '>=', $newPosition)
+                ->increment('position');
+
+            $newSection = MemberSection::create([
+                'product_id' => $produto->id,
+                'title' => $this->duplicateMemberTitle($section->title),
+                'position' => $newPosition,
+                'cover_mode' => $section->cover_mode ?? 'vertical',
+                'section_type' => $section->section_type ?? 'courses',
+            ]);
+
+            $section->load(['modules' => fn ($q) => $q->orderBy('position'), 'modules.lessons' => fn ($q) => $q->orderBy('position')]);
+            foreach ($section->modules as $module) {
+                $this->duplicateMemberModuleRecord($module, $newSection, $produto, copyLessons: true);
+            }
+
+            return $newSection->fresh([
+                'modules' => fn ($q) => $q->orderBy('position'),
+                'modules.lessons' => fn ($q) => $q->orderBy('position'),
+                'modules.relatedProduct',
+            ]);
+        });
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => 'Seção duplicada.',
+                'section' => $this->serializeMemberSectionForBuilder($clone),
+            ]);
+        }
+
+        return back()->with('success', 'Seção duplicada.');
+    }
+
     /**
      * Reordena seções do produto, módulos dentro de uma seção ou aulas dentro de um módulo (transação única).
      *
@@ -1002,6 +1046,43 @@ class MemberBuilderController extends Controller
         return back()->with('success', 'Módulo removido.');
     }
 
+    public function duplicateModule(Request $request, Product $produto, MemberModule $module): JsonResponse|RedirectResponse
+    {
+        $this->authorizeProduct($produto);
+        if ($module->product_id !== $produto->id) {
+            abort(404);
+        }
+
+        $clone = DB::transaction(function () use ($produto, $module) {
+            $module->load(['lessons' => fn ($q) => $q->orderBy('position')]);
+            $newPosition = (int) $module->position + 1;
+            MemberModule::query()
+                ->where('member_section_id', $module->member_section_id)
+                ->where('position', '>=', $newPosition)
+                ->increment('position');
+
+            return $this->duplicateMemberModuleRecord(
+                $module,
+                $module->section()->firstOrFail(),
+                $produto,
+                copyLessons: true,
+                position: $newPosition
+            )->fresh([
+                'lessons' => fn ($q) => $q->orderBy('position'),
+                'relatedProduct',
+            ]);
+        });
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => 'Módulo duplicado.',
+                'module' => $this->serializeMemberModuleForBuilder($clone),
+            ]);
+        }
+
+        return back()->with('success', 'Módulo duplicado.');
+    }
+
     // Lessons
     public function storeLesson(Request $request, Product $produto, MemberModule $module): JsonResponse|RedirectResponse
     {
@@ -1162,6 +1243,33 @@ class MemberBuilderController extends Controller
             return response()->json(['message' => 'Aula removida.']);
         }
         return back()->with('success', 'Aula removida.');
+    }
+
+    public function duplicateLesson(Request $request, Product $produto, MemberLesson $lesson): JsonResponse|RedirectResponse
+    {
+        $this->authorizeProduct($produto);
+        if ($lesson->product_id !== $produto->id) {
+            abort(404);
+        }
+
+        $clone = DB::transaction(function () use ($produto, $lesson) {
+            $newPosition = (int) $lesson->position + 1;
+            MemberLesson::query()
+                ->where('member_module_id', $lesson->member_module_id)
+                ->where('position', '>=', $newPosition)
+                ->increment('position');
+
+            return $this->duplicateMemberLessonRecord($lesson, $lesson->module()->firstOrFail(), $produto, $newPosition);
+        });
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => 'Aula duplicada.',
+                'lesson' => $this->serializeMemberLessonForBuilder($clone),
+            ]);
+        }
+
+        return back()->with('success', 'Aula duplicada.');
     }
 
     // Internal products
@@ -1736,5 +1844,163 @@ class MemberBuilderController extends Controller
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    private function duplicateMemberTitle(string $title): string
+    {
+        $trimmed = trim($title);
+
+        return $trimmed === '' ? 'Cópia' : $trimmed.' (cópia)';
+    }
+
+    private function duplicateMemberModuleRecord(
+        MemberModule $source,
+        MemberSection $targetSection,
+        Product $produto,
+        bool $copyLessons = true,
+        ?int $position = null
+    ): MemberModule {
+        if ($position === null) {
+            $position = (MemberModule::query()->where('member_section_id', $targetSection->id)->max('position') ?? 0) + 1;
+        }
+
+        $clone = MemberModule::create([
+            'member_section_id' => $targetSection->id,
+            'product_id' => $produto->id,
+            'title' => $this->duplicateMemberTitle($source->title),
+            'position' => $position,
+            'thumbnail' => $source->thumbnail,
+            'show_title_on_cover' => $source->show_title_on_cover ?? true,
+            'related_product_id' => $source->related_product_id,
+            'source_member_module_id' => $source->source_member_module_id,
+            'access_type' => $source->access_type,
+            'external_url' => $source->external_url,
+            'release_after_days' => $source->release_after_days,
+            'release_at_date' => $source->release_at_date,
+        ]);
+
+        $shouldCopyLessons = $copyLessons
+            && ($targetSection->section_type ?? 'courses') === 'courses'
+            && ! $source->source_member_module_id;
+
+        if ($shouldCopyLessons) {
+            $source->loadMissing(['lessons' => fn ($q) => $q->orderBy('position')]);
+            foreach ($source->lessons as $lesson) {
+                $this->duplicateMemberLessonRecord($lesson, $clone, $produto);
+            }
+        }
+
+        return $clone;
+    }
+
+    private function duplicateMemberLessonRecord(
+        MemberLesson $source,
+        MemberModule $targetModule,
+        Product $produto,
+        ?int $position = null
+    ): MemberLesson {
+        if ($position === null) {
+            $position = (MemberLesson::query()->where('member_module_id', $targetModule->id)->max('position') ?? 0) + 1;
+        }
+
+        return MemberLesson::create([
+            'member_module_id' => $targetModule->id,
+            'product_id' => $produto->id,
+            'title' => $this->duplicateMemberTitle($source->title),
+            'position' => $position,
+            'type' => $source->type,
+            'content_url' => $source->content_url,
+            'link_title' => $source->link_title,
+            'content_files' => $source->content_files,
+            'support_files' => $source->support_files,
+            'useful_links' => $source->useful_links,
+            'release_after_days' => $source->release_after_days,
+            'release_at_date' => $source->release_at_date,
+            'content_text' => $source->content_text,
+            'duration_seconds' => $source->duration_seconds,
+            'is_free' => (bool) $source->is_free,
+            'watermark_enabled' => (bool) ($source->watermark_enabled ?? false),
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeMemberLessonForBuilder(MemberLesson $lesson): array
+    {
+        return [
+            'id' => $lesson->id,
+            'title' => $lesson->title,
+            'position' => $lesson->position,
+            'type' => $lesson->type,
+            'content_url' => $lesson->content_url,
+            'link_title' => $lesson->link_title,
+            'content_files' => $lesson->content_files,
+            'support_files' => $lesson->support_files,
+            'useful_links' => $lesson->useful_links,
+            'release_after_days' => $lesson->release_after_days,
+            'release_at_date' => $lesson->release_at_date?->format('Y-m-d'),
+            'content_text' => \App\Support\HtmlSanitizer::sanitize($lesson->content_text),
+            'duration_seconds' => $lesson->duration_seconds,
+            'is_free' => (bool) $lesson->is_free,
+            'watermark_enabled' => (bool) ($lesson->watermark_enabled ?? false),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeMemberModuleForBuilder(MemberModule $module): array
+    {
+        $module->loadMissing(['lessons' => fn ($q) => $q->orderBy('position'), 'relatedProduct']);
+
+        $payload = [
+            'id' => $module->id,
+            'title' => $module->title,
+            'position' => $module->position,
+            'thumbnail' => $module->thumbnail,
+            'show_title_on_cover' => $module->show_title_on_cover ?? true,
+            'release_after_days' => $module->release_after_days,
+            'release_at_date' => $module->release_at_date?->format('Y-m-d'),
+            'lessons' => $module->lessons->map(fn (MemberLesson $l) => $this->serializeMemberLessonForBuilder($l))->values()->all(),
+        ];
+
+        if ($module->related_product_id) {
+            $payload['related_product_id'] = $module->related_product_id;
+            $payload['source_member_module_id'] = $module->source_member_module_id;
+            $payload['access_type'] = $module->access_type;
+            $payload['related_product'] = $module->relatedProduct ? [
+                'id' => $module->relatedProduct->id,
+                'name' => $module->relatedProduct->name,
+                'image_url' => $module->relatedProduct->image ? app(StorageService::class)->url($module->relatedProduct->image) : null,
+            ] : null;
+        }
+
+        if ($module->external_url) {
+            $payload['external_url'] = $module->external_url;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeMemberSectionForBuilder(MemberSection $section): array
+    {
+        $section->loadMissing([
+            'modules' => fn ($q) => $q->orderBy('position'),
+            'modules.lessons' => fn ($q) => $q->orderBy('position'),
+            'modules.relatedProduct',
+        ]);
+
+        return [
+            'id' => $section->id,
+            'title' => $section->title,
+            'position' => $section->position,
+            'cover_mode' => $section->cover_mode ?? 'vertical',
+            'section_type' => $section->section_type ?? 'courses',
+            'modules' => $section->modules->map(fn (MemberModule $m) => $this->serializeMemberModuleForBuilder($m))->values()->all(),
+        ];
     }
 }
