@@ -20,7 +20,22 @@ class PartnerAccessService
             return true;
         }
 
-        return $this->hasCoproducerMembership($user);
+        if ($this->hasCoproducerMembership($user) || $this->hasAffiliateMembership($user)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public function hasAffiliateMembership(User $user): bool
+    {
+        return ProductAffiliate::query()
+            ->where('user_id', $user->id)
+            ->whereIn('status', [
+                ProductAffiliate::STATUS_PENDING,
+                ProductAffiliate::STATUS_APPROVED,
+            ])
+            ->exists();
     }
 
     public function hasCoproducerMembership(User $user): bool
@@ -42,7 +57,7 @@ class PartnerAccessService
             ];
         }
 
-        if ($user->isAfiliado()) {
+        if ($user->isAfiliado() || $this->hasAffiliateMembership($user)) {
             return [
                 'dashboard.view' => true,
                 'vendas.view' => true,
@@ -66,7 +81,7 @@ class PartnerAccessService
      */
     public function affiliateMembershipsFor(User $user): Collection
     {
-        if (! $user->isAfiliado()) {
+        if (! $user->isAfiliado() && ! $this->hasAffiliateMembership($user)) {
             return collect();
         }
 

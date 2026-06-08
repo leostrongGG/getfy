@@ -101,6 +101,13 @@ class ProductAffiliateProgramController extends Controller
         $affiliate->update($validated);
 
         if ($wasPending && ($validated['status'] ?? '') === ProductAffiliate::STATUS_APPROVED) {
+            $affiliate->load('user');
+            if ($affiliate->user && ($affiliate->user->isAluno() || $affiliate->user->isAfiliado())) {
+                $affiliate->user->update([
+                    'role' => \App\Models\User::ROLE_AFILIADO,
+                    'tenant_id' => (int) $produto->tenant_id,
+                ]);
+            }
             $this->notifyAffiliateApproved($produto, $affiliate->fresh());
             app(CommissionSplitService::class)->syncAffiliateSplit(
                 $affiliate->fresh(),

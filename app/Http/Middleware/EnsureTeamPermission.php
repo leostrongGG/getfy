@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\PartnerAccessService;
 use App\Services\TeamAccessService;
 use Closure;
 use Illuminate\Http\Request;
@@ -21,17 +22,27 @@ class EnsureTeamPermission
             return $next($request);
         }
 
-        // Qualquer outro papel fora equipe não acessa rotas protegidas por permissão.
-        if (! $user->isTeam()) {
+        if ($user->isTeam()) {
+            $access = app(TeamAccessService::class);
+            if ($access->can($user, $permission)) {
+                return $next($request);
+            }
+
             abort(403, 'Acesso não autorizado.');
         }
 
-        $access = app(TeamAccessService::class);
-        if (! $access->can($user, $permission)) {
-            abort(403, 'Acesso não autorizado.');
+        // Parceiros (afiliado/co-produtor) que caírem em rotas do produtor (/financeiro, /dashboard)
+        // são redirecionados ao painel correto em vez de 403.
+        if (app(PartnerAccessService::class)->usesPartnerPanel($user)) {
+            if ($permission === 'financeiro.view') {
+                return redirect('/parceiro/financeiro');
+            }
+            if ($permission === 'dashboard.view') {
+                return redirect('/parceiro');
+            }
         }
 
-        return $next($request);
+        abort(403, 'Acesso não autorizado.');
     }
 }
 

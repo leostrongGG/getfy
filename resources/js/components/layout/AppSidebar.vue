@@ -74,13 +74,14 @@ const canView = (key) => {
     return !!perms.value?.[key];
 };
 
-const usesPartnerPanel = computed(() => !!page.props.auth?.uses_partner_panel);
+    const usesPartnerPanel = computed(() => !!page.props.auth?.uses_partner_panel);
 
 const navItems = computed(() => {
     const items = [];
     const role = page.props.auth?.user?.role;
     const isProducer = role === 'admin' || role === 'infoprodutor';
-    const partnerNavOnly = usesPartnerPanel.value && (role === 'coprodutor' || role === 'afiliado' || role === 'team');
+    // Qualquer parceiro (afiliado, co-produtor ou vínculo ativo) usa rotas /parceiro/*
+    const partnerNavOnly = usesPartnerPanel.value && !isProducer;
 
     if (partnerNavOnly) {
         items.push(

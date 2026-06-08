@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.1] - 08-06-2026
+
+### Correções
+
+- **Documentação da API de pagamentos**: restauradas as páginas Vue e componentes ausentes (`Docs/ApiPagamentos`, `Docs/ApiPagamentosTestar` e blocos em `components/docs/`); corrigida a **tela preta** ao abrir `/docs/api-pagamentos` (erro `Page not found: ./Pages/Docs/ApiPagamentos.vue`).
+- **Painel do afiliado / co-produtor — Financeiro**: corrigido **403 (Acesso não autorizado)** ao abrir Financeiro/Faturamento quando o parceiro tinha vínculo ativo mas role ainda era `aluno` (menu apontava para `/financeiro` do produtor); menu e middleware passam a usar `/parceiro/financeiro`; aprovação de afiliado no painel do produtor atualiza o role para `afiliado`.
+- **Utmify / moedas internacionais**: valores enviados à Utmify passam a ser convertidos para **BRL em qualquer moeda** (USD, EUR, MZN, JPY, etc.) quando o `settlement_amount_cents` do webhook CajuPay ainda não está disponível; pedidos internacionais passam a gravar `amount_brl` estimado no metadata na criação.
+
+### Melhorias
+
+- **Atualização (hospedagem compartilhada)**: guia `#ZIP-UPDATE/Corrigir Erro 500.md` com instruções para usar `APP_AUTO_MIGRATE=true` no `.env` quando migrations pendentes causarem erro 500 após update.
+
 ## [2.0.0] - 07-06-2026
 
 ### Novidades
@@ -79,7 +91,6 @@
 
 - **Aprovação manual / webhooks**: corrigido `SendMetaPurchaseCapiOnOrderCompleted` (versão antiga com `ShouldQueue` + segundo argumento no `handle()` quebrava `OrderCompleted`, bloqueava webhooks e exibia erro falso ao aprovar venda); integrações não impedem mais a concessão de acesso.
 - **Dashboard / vendas após meia-noite**: cache do dashboard não incluía a data no filtro “hoje” (podia mostrar totais zerados ou do dia anterior até expirar o cache); filtros de período passam a usar o fuso `APP_TIMEZONE` com limites corretos de meia-noite; cache de “hoje/ontem” renova em 60s e é invalidado a cada venda concluída.
-- **Utmify / vendas em moeda estrangeira**: valores enviados à Utmify passam a usar a **liquidação em BRL** (`settlement_amount_cents` do webhook CajuPay quando disponível); para **qualquer moeda** (USD, EUR, MZN, JPY, etc.), quando o settlement ainda não veio, o sistema **converte para BRL pela taxa do tenant** em vez de tratar a moeda estrangeira como se fosse real.
 - **CajuPay / Google Pay**: corrigido pagamento aprovado na CajuPay sem concluir o pedido no Getfy — o SDK não faz mais priming automático antes do `confirm-order`, a wallet só é exibida com dados do cliente válidos e o evento `completed` do SDK dispara materialização do pedido + polling.
 - **CajuPay / moeda no Brasil**: cobrança em **BRL** quando o comprador está no BR e não escolheu moeda estrangeira manualmente (evita enviar USD à API com valor em reais).
 - **Reembolsos (Vendas)**: corrigido erro ao reembolsar pedidos **sem `user_id`** (comprador resolvido pelo e-mail), falha quando o **`payment_id` CajuPay** não estava disponível e bloqueio após tentativa anterior falhada (nova tentativa permitida).

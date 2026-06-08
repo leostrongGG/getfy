@@ -377,7 +377,7 @@ class PartnerCommissionTest extends TestCase
             ],
         ]);
 
-        $this->actingAs($affiliateUser)
+        $this->actingAs($partner)
             ->get('/parceiro/vendas')
             ->assertOk()
             ->assertInertia(fn ($page) => $page
@@ -388,5 +388,55 @@ class PartnerCommissionTest extends TestCase
                 ->where('vendas.data.0.commission_amount', 10)
                 ->where('vendas.data.0.commission_is_estimated', true)
             );
+    }
+
+    public function test_affiliate_can_access_parceiro_financeiro(): void
+    {
+        $this->withoutMiddleware(EnsureInstalled::class);
+
+        User::factory()->create(['role' => User::ROLE_INFOPRODUTOR, 'tenant_id' => 1]);
+        $product = $this->createTestProduct(['tenant_id' => 1]);
+        $partner = User::factory()->create([
+            'role' => User::ROLE_AFILIADO,
+            'tenant_id' => 1,
+        ]);
+
+        ProductAffiliate::create([
+            'product_id' => $product->id,
+            'user_id' => $partner->id,
+            'affiliate_code' => 'fin12345',
+            'status' => ProductAffiliate::STATUS_APPROVED,
+        ]);
+
+        $this->actingAs($partner)
+            ->get('/parceiro/financeiro')
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page->component('Partner/Financeiro'));
+    }
+
+    public function test_coproducer_with_aluno_role_redirects_from_producer_financeiro(): void
+    {
+        $this->withoutMiddleware(EnsureInstalled::class);
+
+        User::factory()->create(['role' => User::ROLE_INFOPRODUTOR, 'tenant_id' => 1]);
+        $product = $this->createTestProduct(['tenant_id' => 1]);
+        $partner = User::factory()->create([
+            'role' => User::ROLE_ALUNO,
+            'tenant_id' => 1,
+        ]);
+
+        ProductCoproducer::create([
+            'product_id' => $product->id,
+            'user_id' => $partner->id,
+            'email' => $partner->email,
+            'status' => ProductCoproducer::STATUS_ACTIVE,
+            'commission_percent' => 12,
+            'commission_on_producer_sales' => true,
+            'commission_on_affiliate_sales' => false,
+        ]);
+
+        $this->actingAs($partner)
+            ->get('/financeiro')
+            ->assertRedirect('/parceiro/financeiro');
     }
 }
