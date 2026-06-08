@@ -11,6 +11,7 @@ import WebhookSidebar from '@/components/integrations/WebhookSidebar.vue';
 import ExternalCheckoutSidebar from '@/components/integrations/ExternalCheckoutSidebar.vue';
 import CademiSidebar from '@/components/integrations/CademiSidebar.vue';
 import ConversionPixelsSidebar from '@/components/integrations/ConversionPixelsSidebar.vue';
+import PixelXSidebar from '@/components/integrations/PixelXSidebar.vue';
 import GatewayCard from '@/components/settings/GatewayCard.vue';
 import GatewayConfigSidebar from '@/components/settings/GatewayConfigSidebar.vue';
 import { CreditCard, Zap } from 'lucide-vue-next';
@@ -54,6 +55,12 @@ const APPS_BASE = [
         image: 'images/integrations/cademi.png',
     },
     {
+        id: 'pixel_x',
+        name: 'Pixel X',
+        description: 'Rastreamento de conversão. Envie os 10 eventos mapeados para a Pixel X com token e payload proprietário.',
+        image: 'images/integrations/pixel-x.jpg',
+    },
+    {
         id: 'conversion_pixels',
         name: 'Pixels e rastreamento',
         description: 'Meta Ads, TikTok, Google Ads, Google Analytics e scripts. Reutilize nos produtos sem cadastrar de novo.',
@@ -80,6 +87,7 @@ const props = defineProps({
     plugin_apps: { type: Array, default: () => [] },
     conversion_pixel_integrations: { type: Array, default: () => [] },
     external_checkout_endpoints: { type: Array, default: () => [] },
+    pixel_x_integrations: { type: Array, default: () => [] },
 });
 
 import { usePluginComponentResolver } from '@/composables/usePluginComponentResolver';
@@ -123,6 +131,15 @@ const APPS = computed(() =>
         }
         if (app.id === 'conversion_pixels') {
             const hasActive = (props.conversion_pixel_integrations || []).some(
+                (i) => i.configured && i.is_active
+            );
+            return {
+                ...app,
+                status: hasActive ? 'active' : undefined,
+            };
+        }
+        if (app.id === 'pixel_x') {
+            const hasActive = (props.pixel_x_integrations || []).some(
                 (i) => i.configured && i.is_active
             );
             return {
@@ -226,6 +243,11 @@ function closeConversionPixelsSidebar() {
     conversionPixelsSidebarOpen.value = false;
 }
 
+const pixelXSidebarOpen = ref(false);
+function openPixelXSidebar() { pixelXSidebarOpen.value = true; }
+function closePixelXSidebar() { pixelXSidebarOpen.value = false; }
+function onPixelXSaved() { router.reload({ only: ['pixel_x_integrations', 'products'] }); }
+
 function openPluginSidebar(app) {
     selectedPluginSlot.value = app?.plugin_slot || (app?.plugin_component ? { component: app.plugin_component, ui_mode: 'legacy' } : null);
     selectedPluginAppName.value = app?.name || 'Integração';
@@ -276,6 +298,8 @@ function onAppClick(app) {
         openCademiSidebar();
     } else if (app.id === 'conversion_pixels') {
         openConversionPixelsSidebar();
+    } else if (app.id === 'pixel_x') {
+        openPixelXSidebar();
     } else if (app.plugin) {
         openPluginSidebar(app);
     }
@@ -451,6 +475,13 @@ watch(() => page.url, () => syncGatewayFromQuery());
             :endpoints="external_checkout_endpoints"
             @close="closeExternalCheckoutSidebar"
             @saved="onExternalCheckoutSaved"
+        />
+        <PixelXSidebar
+            :open="pixelXSidebarOpen"
+            :pixel_x_integrations="pixel_x_integrations"
+            :products="products"
+            @close="closePixelXSidebar"
+            @saved="onPixelXSaved"
         />
         <!-- Plugin sidebars (ex.: AutoZap) -->
         <Teleport to="body">
