@@ -65,7 +65,12 @@ if [ -n "$($SUDO "${GIT_BASE[@]}" status --porcelain 2>/dev/null || true)" ]; th
     >/dev/null 2>&1 || true
 fi
 
-$SUDO "${GIT_BASE[@]}" checkout -B "$BRANCH" "origin/$BRANCH"
+echo "Descartando alterações locais em public/build (será recompilado)..." >&2
+$SUDO "${GIT_BASE[@]}" restore --worktree --staged public/build public/hot 2>/dev/null \
+  || $SUDO "${GIT_BASE[@]}" checkout -f -- public/build public/hot 2>/dev/null \
+  || true
+
+$SUDO "${GIT_BASE[@]}" checkout -f -B "$BRANCH" "origin/$BRANCH"
 $SUDO "${GIT_BASE[@]}" reset --hard "origin/$BRANCH"
 
 if [ "$HAS_LOCAL_CHANGES" -eq 1 ]; then
