@@ -42,12 +42,22 @@ class PixelXIntegration extends Model
 
     /**
      * Check if this integration listens to the given event class.
+     * Events are stored as slugs; translates FQCN → slug via webhook_events config.
      */
     public function listensTo(string $eventClass): bool
     {
         $events = $this->events ?? [];
+        if (empty($events)) {
+            return false;
+        }
 
-        return in_array($eventClass, $events, true);
+        // config('webhook_events.events') maps FQCN => slug
+        $slug = config('webhook_events.events')[$eventClass] ?? null;
+        if ($slug === null) {
+            return false;
+        }
+
+        return in_array($slug, $events, true);
     }
 
     /**

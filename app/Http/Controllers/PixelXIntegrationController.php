@@ -180,6 +180,7 @@ class PixelXIntegrationController extends Controller
         }
 
         $body = PixelXPayloadBuilder::samplePayload($slug, $token);
+        $logPayload = array_diff_key($body, ['token' => true]);
 
         try {
             $response = Http::timeout(15)
@@ -194,7 +195,7 @@ class PixelXIntegrationController extends Controller
                 'pixel_x_integration_id' => $pixelX->id,
                 'event' => $slug,
                 'event_label' => $slug,
-                'request_payload' => $body,
+                'request_payload' => $logPayload,
                 'response_status' => $responseStatus,
                 'response_body' => strlen($responseBody) > 2000 ? substr($responseBody, 0, 2000) . '…' : $responseBody,
                 'success' => $success,
@@ -218,7 +219,7 @@ class PixelXIntegrationController extends Controller
                 'pixel_x_integration_id' => $pixelX->id,
                 'event' => $slug,
                 'event_label' => $slug,
-                'request_payload' => $body,
+                'request_payload' => $logPayload,
                 'response_status' => null,
                 'response_body' => null,
                 'success' => false,
