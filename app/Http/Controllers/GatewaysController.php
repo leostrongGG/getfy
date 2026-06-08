@@ -83,9 +83,6 @@ class GatewaysController extends Controller
             $webhookUrl = Route::has($webhookRoute) ? route($webhookRoute) : null;
         } elseif ($slug === 'cajupay' && Route::has('webhooks.cajupay')) {
             $webhookUrl = route('webhooks.cajupay');
-            $webhookUrlSecondary = Route::has('webhooks.cajupay.checkout-alias')
-                ? route('webhooks.cajupay.checkout-alias')
-                : null;
         }
 
         $usesOauth = ! empty($gateway['oauth']);
@@ -338,7 +335,7 @@ class GatewaysController extends Controller
                 $rules[$key] = ['nullable', 'boolean'];
                 continue;
             }
-            if ($slug === 'spacepag' && in_array($key, ['public_key', 'secret_key'], true)) {
+            if (in_array($slug, ['spacepag', 'cajupay'], true) && in_array($key, ['public_key', 'secret_key'], true)) {
                 $rules[$key] = ['nullable', 'string', 'max:2000'];
 
                 continue;
@@ -383,6 +380,20 @@ class GatewaysController extends Controller
                 return response()->json([
                     'success' => false,
                     'message' => 'Informe ao menos a chave pública (pk_) ou a chave privada (sk_) da Spacepag.',
+                ], 422);
+            }
+        }
+
+        if ($slug === 'cajupay') {
+            foreach (['public_key', 'secret_key'] as $preserveField) {
+                if (trim((string) ($credentials[$preserveField] ?? '')) === '' && ! empty($existingCredentials[$preserveField])) {
+                    $credentials[$preserveField] = $existingCredentials[$preserveField];
+                }
+            }
+            if (trim((string) ($credentials['public_key'] ?? '')) === '' || trim((string) ($credentials['secret_key'] ?? '')) === '') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Configure a chave pública (gpk_) e a chave secreta (gsk_) da CajuPay.',
                 ], 422);
             }
         }

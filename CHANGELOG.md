@@ -1,5 +1,45 @@
 # Changelog
 
+## [2.0.0] - 07-06-2026
+
+### Novidades
+
+- **Afiliados**: programa de afiliação integrado à plataforma.
+- **Co-produtores**: gestão de parceiros, comissões e repasses.
+- **Financeiro**: visão geral de saldos e opção de **realizar saque pela plataforma** (via CajuPay).
+- **Meus produtos**: área para o aluno aceder a **todos os produtos comprados** num único lugar.
+- **Extensibilidade de plugins**: arquitetura ampliada para integrações e extensões de terceiros.
+
+### Melhorias
+
+- **UI/UX geral**: melhorias de usabilidade e ajustes suaves em todo o painel.
+- **Vendas**: botão de **WhatsApp** na listagem de vendas.
+- **CajuPay / checkout**: idioma (`locale`) repassado ao **SDK** na renderização dos inputs de **cartão** e **wallets** (Apple Pay / Google Pay).
+- **Webhooks**: payload enriquecido com **arrays mais detalhados** sobre produto, oferta e itens do pedido.
+- **Assinaturas**: **dias de carência** e **dias de aviso** antes da cobrança/renovação configuráveis por plano.
+- **Pixels de conversão**: configuração **global** (tenant) para facilitar operação **multi-produto**.
+- **Tracking**: recursos mais avançados de monitoramento do funil de checkout.
+- **Ofertas**: IDs públicos de ofertas passam a ser **aleatórios** (não sequenciais).
+- **Checkout / moedas**: opção de **detecção global de moeda** ou **moeda única fixa** por produto.
+- **Imagens**: melhorias no carregamento e entrega de assets no checkout e no painel.
+- **Editor de checkout**: melhorias de usabilidade e preview.
+- **Checkout Pro (API de pagamentos)**: melhorias no fluxo hospedado e na integração com gateways.
+- **Webhooks (integrações)**: melhorias no registro, disparo e diagnóstico de eventos.
+- **Leitor de PDF** (área de membros): experiência de leitura e navegação aprimorada.
+- **Instalador**: wizard de instalação otimizado para **hospedagem compartilhada**.
+- **Checkout (conversão)**: ajustes suaves de UI/UX com base em testes dos últimos meses.
+
+### Correções
+
+- **Vendas**: corrigida a **paginação** da página `/vendas`.
+- **Notificações push**: deixavam de funcionar após **atualizar a plataforma**; corrigido o registro do service worker pós-update.
+- **Checkout / order bump**: order bump **não era adicionado** quando o produto principal era **assinatura**.
+- **Checkout (CSP)**: corrigidos erros de **Content Security Policy** em algumas instalações em **hospedagem compartilhada**.
+- **Atualização**: melhorias no **update pelo painel** (estabilidade e feedback de progresso).
+- **Google / GMT**: corrigido fuso e formatação **GMT** em integrações Google (Analytics / Ads).
+- **Área de membros**: produtos extras comprados por vezes ficavam **inacessíveis** após a compra.
+- **Comunidade**: corrigido erro ao **criar nova página** na comunidade.
+
 ## [1.0.15] - 24-05-2026
 
 ### Novidades
@@ -39,7 +79,7 @@
 
 - **Aprovação manual / webhooks**: corrigido `SendMetaPurchaseCapiOnOrderCompleted` (versão antiga com `ShouldQueue` + segundo argumento no `handle()` quebrava `OrderCompleted`, bloqueava webhooks e exibia erro falso ao aprovar venda); integrações não impedem mais a concessão de acesso.
 - **Dashboard / vendas após meia-noite**: cache do dashboard não incluía a data no filtro “hoje” (podia mostrar totais zerados ou do dia anterior até expirar o cache); filtros de período passam a usar o fuso `APP_TIMEZONE` com limites corretos de meia-noite; cache de “hoje/ontem” renova em 60s e é invalidado a cada venda concluída.
-- **Utmify / vendas em moeda estrangeira**: valores enviados à Utmify passam a usar o **liquidação em BRL** (`settlement_amount_cents` do webhook CajuPay), e não o valor em USD/EUR da cobrança — evita registrar R$ 4,86 quando o recebimento real foi ~R$ 27.
+- **Utmify / vendas em moeda estrangeira**: valores enviados à Utmify passam a usar a **liquidação em BRL** (`settlement_amount_cents` do webhook CajuPay quando disponível); para **qualquer moeda** (USD, EUR, MZN, JPY, etc.), quando o settlement ainda não veio, o sistema **converte para BRL pela taxa do tenant** em vez de tratar a moeda estrangeira como se fosse real.
 - **CajuPay / Google Pay**: corrigido pagamento aprovado na CajuPay sem concluir o pedido no Getfy — o SDK não faz mais priming automático antes do `confirm-order`, a wallet só é exibida com dados do cliente válidos e o evento `completed` do SDK dispara materialização do pedido + polling.
 - **CajuPay / moeda no Brasil**: cobrança em **BRL** quando o comprador está no BR e não escolheu moeda estrangeira manualmente (evita enviar USD à API com valor em reais).
 - **Reembolsos (Vendas)**: corrigido erro ao reembolsar pedidos **sem `user_id`** (comprador resolvido pelo e-mail), falha quando o **`payment_id` CajuPay** não estava disponível e bloqueio após tentativa anterior falhada (nova tentativa permitida).

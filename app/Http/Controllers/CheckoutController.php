@@ -38,6 +38,7 @@ use App\Support\CheckoutConfigNormalizer;
 use App\Support\CheckoutCurrencyCatalog;
 use App\Support\CheckoutCurrencyMode;
 use App\Support\CheckoutCustomPriceByCurrency;
+use App\Support\OrderReportingAmounts;
 use App\Support\CheckoutPaymentMethodsBuilder;
 use App\Support\CheckoutPaymentMethodOrder;
 use App\Support\CheckoutTranslations;
@@ -2062,6 +2063,12 @@ class CheckoutController extends Controller
             'cajupay_session_token' => $draft['cajupay_token'] ?? null,
             'cajupay_checkout_session_id' => $draft['checkout_session_id'] ?? null,
         ];
+        if ($chargeCurrency !== 'BRL') {
+            $amountBrl = OrderReportingAmounts::estimateAmountBrl($totalAmount, $chargeCurrency, $tenantId);
+            if ($amountBrl !== null && $amountBrl > 0) {
+                $orderMetadata['amount_brl'] = $amountBrl;
+            }
+        }
         if ($displayCurrency !== '' && $displayCurrency !== $chargeCurrency) {
             $orderMetadata['display_currency'] = $displayCurrency;
             if (isset($draft['display_amount']) && is_numeric($draft['display_amount'])) {

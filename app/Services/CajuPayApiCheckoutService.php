@@ -17,6 +17,7 @@ use App\Support\CajuPayLocale;
 use App\Support\CajuPayPartnerCheckoutUrl;
 use App\Support\CheckoutPaymentMethodsBuilder;
 use App\Support\MoneyMinorUnits;
+use App\Support\OrderReportingAmounts;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -349,6 +350,12 @@ class CajuPayApiCheckoutService
             'cajupay_session_token' => $draft['cajupay_token'] ?? null,
             'cajupay_checkout_session_id' => $draft['checkout_session_id'] ?? null,
         ]);
+        if ($chargeCurrency !== 'BRL') {
+            $amountBrl = OrderReportingAmounts::estimateAmountBrl($totalAmount, $chargeCurrency, $tenantId);
+            if ($amountBrl !== null && $amountBrl > 0) {
+                $orderMetadata['amount_brl'] = $amountBrl;
+            }
+        }
 
         $order = Order::create([
             'tenant_id' => $tenantId,

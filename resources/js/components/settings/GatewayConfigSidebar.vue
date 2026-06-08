@@ -292,9 +292,12 @@ async function testConnection() {
         if ((k.type || 'text') === 'boolean') continue;
         if (k.optional) continue;
         if (
-            gateway.value.slug === 'spacepag'
+            (gateway.value.slug === 'spacepag' || gateway.value.slug === 'cajupay')
             && (k.key === 'secret_key' || k.key === 'public_key')
-            && gateway.value.spacepag_keys_configured
+            && (
+                gateway.value.spacepag_keys_configured
+                || (gateway.value.slug === 'cajupay' && gateway.value.is_configured)
+            )
         ) {
             continue;
         }
@@ -547,7 +550,7 @@ const canTestConnection = computed(() => {
                                 {{ webhookCopied ? 'Copiado!' : 'Copiar' }}
                             </button>
                         </div>
-                        <template v-if="gateway.webhook_url_secondary">
+                        <template v-if="gateway.webhook_url_secondary && gateway.slug !== 'cajupay'">
                             <p class="mb-1 text-[11px] font-medium text-zinc-600 dark:text-zinc-400">URL alternativa (mesmo endpoint)</p>
                             <div class="flex gap-2">
                                 <input
