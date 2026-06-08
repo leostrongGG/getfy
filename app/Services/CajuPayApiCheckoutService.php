@@ -14,6 +14,7 @@ use App\Models\ProductOffer;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
 use App\Support\CajuPayLocale;
+use App\Support\CajuPayPartnerCheckoutUrl;
 use App\Support\CheckoutPaymentMethodsBuilder;
 use App\Support\MoneyMinorUnits;
 use Illuminate\Http\Request;
@@ -88,7 +89,8 @@ class CajuPayApiCheckoutService
             $consumer,
             $allowedMethods,
             $defaultMethodMap[$paymentMethod] ?? 'card',
-            CajuPayLocale::fromCheckoutLocale('pt_BR')
+            CajuPayLocale::fromCheckoutLocale('pt_BR'),
+            CajuPayPartnerCheckoutUrl::forApiCheckoutSession($session)
         );
 
         $availableMethods = $driver->getSessionAvailableMethods($sessionResult['token'], $credentials);

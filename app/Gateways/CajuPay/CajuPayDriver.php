@@ -88,6 +88,7 @@ class CajuPayDriver implements GatewayDriver
         string $externalId,
         string $postbackUrl,
         ?string $splitId = null,
+        ?string $partnerCheckoutUrl = null,
     ): array {
         unset($postbackUrl);
         if (! $this->hasApiKeys($credentials)) {
@@ -120,17 +121,17 @@ class CajuPayDriver implements GatewayDriver
         if ($splitId) {
             $body['split_id'] = $splitId;
         }
+        $this->applyPartnerCheckoutUrl($body, $partnerCheckoutUrl);
 
         $response = $this->httpForCredentials($credentials)
             ->withHeaders(['Idempotency-Key' => Str::limit($idempotencyKey, 200, '')])
             ->post('/api/payments/pix', $body);
 
         if (! $response->successful()) {
-            $msg = $response->body();
-            if (strlen($msg) > 300) {
-                $msg = substr($msg, 0, 300).'…';
-            }
-            throw new \RuntimeException('CajuPay: '.($msg !== '' ? $msg : 'Erro ao criar cobrança PIX.'));
+            throw new \RuntimeException('CajuPay: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao criar cobrança PIX.'
+            ));
         }
 
         $data = $response->json();
@@ -431,7 +432,8 @@ class CajuPayDriver implements GatewayDriver
         array $consumer,
         array $allowedMethods,
         string $defaultMethod,
-        ?string $locale = null
+        ?string $locale = null,
+        ?string $partnerCheckoutUrl = null,
     ): array {
         if (! $this->hasApiKeys($credentials)) {
             throw new \RuntimeException('CajuPay: configure a chave pública e a chave secreta da API (painel CajuPay → API / Chaves).');
@@ -489,6 +491,7 @@ class CajuPayDriver implements GatewayDriver
         if ($localeTag !== '') {
             $body['locale'] = mb_substr($localeTag, 0, 16);
         }
+        $this->applyPartnerCheckoutUrl($body, $partnerCheckoutUrl);
 
         $idempotencyKey = 'getfy-sdk-'.$externalId.'-'.Str::lower(Str::random(8));
 
@@ -497,11 +500,10 @@ class CajuPayDriver implements GatewayDriver
             ->post('/api/sdk/v1/checkout/sessions', $body);
 
         if (! $response->successful()) {
-            $msg = $response->body();
-            if (strlen($msg) > 300) {
-                $msg = substr($msg, 0, 300).'…';
-            }
-            throw new \RuntimeException('CajuPay: '.($msg !== '' ? $msg : 'Erro ao criar sessão de checkout.'));
+            throw new \RuntimeException('CajuPay: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao criar sessão de checkout.'
+            ));
         }
 
         $data = $response->json();
@@ -1184,5 +1186,44 @@ class CajuPayDriver implements GatewayDriver
         if ($splitId) {
             $body['split_id'] = $splitId;
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $body
+     */
+    private function applyPartnerCheckoutUrl(array &$body, ?string $partnerCheckoutUrl): void
+    {
+        $url = trim((string) $partnerCheckoutUrl);
+        if ($url === '') {
+            return;
+        }
+
+        $body['partner_checkout_url'] = $url;
+    }
+
+    private function formatApiErrorMessage(string $body, string $fallback): string
+    {
+        $decoded = json_decode($body, true);
+        if (is_array($decoded)) {
+            $error = strtolower(trim((string) ($decoded['error'] ?? '')));
+            $friendly = match ($error) {
+                'https_required' => 'A URL do checkout deve usar HTTPS. Verifique APP_URL no servidor.',
+                'invalid_partner_checkout_url' => 'URL do checkout inválida. Verifique APP_URL e o slug do produto.',
+                default => '',
+            };
+            if ($friendly !== '') {
+                return $friendly;
+            }
+        }
+
+        $msg = trim($body);
+        if ($msg === '') {
+            return $fallback;
+        }
+        if (strlen($msg) > 300) {
+            $msg = substr($msg, 0, 300).'…';
+        }
+
+        return $msg;
     }
 }

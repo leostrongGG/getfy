@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\URL;
 use Tests\TestCase;
 
 class CajuPayMultiCurrencyTest extends TestCase
@@ -17,6 +18,9 @@ class CajuPayMultiCurrencyTest extends TestCase
     public function test_cajupay_session_sends_display_currency_usd_to_api(): void
     {
         $this->withoutMiddleware(EnsureInstalled::class);
+
+        config(['app.url' => 'https://getfy.test']);
+        URL::forceRootUrl('https://getfy.test');
 
         Http::fake([
             '*/api/sdk/v1/checkout/sessions' => Http::response([
@@ -41,6 +45,7 @@ class CajuPayMultiCurrencyTest extends TestCase
 
         $product = $this->createTestProduct([
             'price' => 100,
+            'checkout_slug' => 'produto-usd-test',
             'checkout_config' => array_merge(Product::defaultCheckoutConfig(), [
                 'payment_gateways' => ['card' => 'cajupay'],
                 'custom_prices_by_currency' => [
@@ -80,7 +85,8 @@ class CajuPayMultiCurrencyTest extends TestCase
             $body = $request->data();
 
             return ($body['currency'] ?? null) === 'USD'
-                && (int) ($body['amount_cents'] ?? 0) === 1999;
+                && (int) ($body['amount_cents'] ?? 0) === 1999
+                && str_contains((string) ($body['partner_checkout_url'] ?? ''), '/c/produto-usd-test');
         });
     }
 

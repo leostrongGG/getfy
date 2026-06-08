@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Services\CommissionSplitService;
 use App\Models\Setting;
+use App\Support\CajuPayPartnerCheckoutUrl;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 
@@ -69,14 +70,26 @@ class PaymentService
                     }
                 }
 
-                $result = $driver->createPixPayment(
-                    $credentials,
-                    (float) $order->amount,
-                    $consumer,
-                    (string) $order->id,
-                    $postbackUrl,
-                    $splitId
-                );
+                if ($gatewaySlug === 'cajupay') {
+                    $order->loadMissing(['product', 'productOffer', 'subscriptionPlan']);
+                    $result = $driver->createPixPayment(
+                        $credentials,
+                        (float) $order->amount,
+                        $consumer,
+                        (string) $order->id,
+                        $postbackUrl,
+                        $splitId,
+                        CajuPayPartnerCheckoutUrl::forOrder($order)
+                    );
+                } else {
+                    $result = $driver->createPixPayment(
+                        $credentials,
+                        (float) $order->amount,
+                        $consumer,
+                        (string) $order->id,
+                        $postbackUrl
+                    );
+                }
                 $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
                 $metadata = is_array($order->metadata) ? $order->metadata : [];
                 $orderUpdate = [

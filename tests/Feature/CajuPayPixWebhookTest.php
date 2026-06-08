@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\PaymentService;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\URL;
 use Tests\TestCase;
 
 class CajuPayPixWebhookTest extends TestCase
@@ -223,6 +224,9 @@ class CajuPayPixWebhookTest extends TestCase
 
     public function test_payment_service_persists_cajupay_payment_id_on_pix_create(): void
     {
+        config(['app.url' => 'https://getfy.test']);
+        URL::forceRootUrl('https://getfy.test');
+
         Http::fake([
             '*/api/payments/pix' => Http::response([
                 'payment_id' => self::PAYMENT_UUID,
@@ -248,6 +252,7 @@ class CajuPayPixWebhookTest extends TestCase
         $user = User::factory()->create();
         $product = $this->createTestProduct([
             'price' => 49.90,
+            'checkout_slug' => 'pix-produto-test',
             'checkout_config' => array_merge(Product::defaultCheckoutConfig(), [
                 'payment_gateways' => ['pix' => 'cajupay'],
             ]),
@@ -270,10 +275,82 @@ class CajuPayPixWebhookTest extends TestCase
             'email' => $user->email,
         ]);
 
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), '/api/payments/pix')) {
+                return false;
+            }
+            $body = $request->data();
+
+            return str_contains((string) ($body['partner_checkout_url'] ?? ''), '/c/pix-produto-test');
+        });
+
         $order->refresh();
         $this->assertSame('cajupay', $order->gateway);
         $this->assertSame(self::PAYMENT_UUID, $order->gateway_id);
         $this->assertSame(self::PAYMENT_UUID, $order->metadata['cajupay_payment_id'] ?? null);
         $this->assertSame('pix', $order->metadata['checkout_payment_method'] ?? null);
+    }
+
+    public function test_pix_create_omits_partner_checkout_url_on_http_app_url(): void
+    {
+        config(['app.url' => 'http://getfy-opensource.test']);
+        URL::forceRootUrl('http://getfy-opensource.test');
+
+        Http::fake([
+            '*/api/payments/pix' => Http::response([
+                'payment_id' => self::PAYMENT_UUID,
+                'pix_qr_code' => 'data:image/png;base64,abc',
+                'pix_copy_paste' => '00020126580014br.gov.bcb.pix',
+            ], 201),
+        ]);
+
+        Setting::set('gateway_order', ['pix' => ['cajupay']], 1);
+
+        $cred = GatewayCredential::create([
+            'tenant_id' => 1,
+            'gateway_slug' => 'cajupay',
+            'credentials' => '',
+            'is_connected' => true,
+        ]);
+        $cred->setEncryptedCredentials([
+            'public_key' => 'gpk_test',
+            'secret_key' => 'gsk_test',
+        ]);
+        $cred->save();
+
+        $user = User::factory()->create();
+        $product = $this->createTestProduct([
+            'price' => 49.90,
+            'checkout_slug' => 'pix-produto-test',
+            'checkout_config' => array_merge(Product::defaultCheckoutConfig(), [
+                'payment_gateways' => ['pix' => 'cajupay'],
+            ]),
+        ]);
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $product->id,
+            'status' => 'pending',
+            'amount' => 49.90,
+            'currency' => 'BRL',
+            'email' => $user->email,
+            'metadata' => ['checkout_payment_method' => 'pix'],
+        ]);
+
+        app(PaymentService::class)->createPixPayment($order, $product, [
+            'name' => 'Cliente Teste',
+            'document' => '52998224725',
+            'email' => $user->email,
+        ]);
+
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), '/api/payments/pix')) {
+                return false;
+            }
+            $body = $request->data();
+
+            return ! array_key_exists('partner_checkout_url', $body);
+        });
     }
 }

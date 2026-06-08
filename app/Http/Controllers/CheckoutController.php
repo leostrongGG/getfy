@@ -1657,7 +1657,12 @@ class CheckoutController extends Controller
                 [], // sem consumer; será informado no confirm via initialPayer ou colhido pelo SDK
                 $allowedMethods,
                 $defaultMethodMap[$method] ?? 'card',
-                $cajupayLocale
+                $cajupayLocale,
+                \App\Support\CajuPayPartnerCheckoutUrl::forProductCheckout(
+                    $product,
+                    $context['offer'] ?? null,
+                    $context['plan'] ?? null
+                )
             );
         } catch (\Throwable $e) {
             Log::warning('CajuPaySession: falha ao criar sessão SDK', [
