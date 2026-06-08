@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\ExistingPixCheckoutRedirect;
 use App\Models\Order;
 use App\Models\Product;
+use App\Support\CheckoutTurnstileSettings;
 use App\Support\PendingPixCheckoutResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -46,7 +47,7 @@ class CheckoutAbuseGuard
         }
 
         $requires = $this->requiresCaptcha($request, $product);
-        $siteKey = trim((string) config('checkout_security.captcha.site_key', ''));
+        $siteKey = $this->turnstileSiteKey();
 
         return [
             'requires_captcha' => $requires && $this->turnstile->isConfigured(),
@@ -58,6 +59,12 @@ class CheckoutAbuseGuard
     {
         if (! $this->isEnabled()) {
             return false;
+        }
+
+        $paymentMethod = strtolower((string) $request->input('payment_method', ''));
+
+        if (CheckoutTurnstileSettings::isEnabled()) {
+            return CheckoutTurnstileSettings::requiresTokenForPaymentMethod($paymentMethod);
         }
 
         $mode = strtolower((string) config('checkout_security.captcha.mode', 'adaptive'));
@@ -124,6 +131,22 @@ class CheckoutAbuseGuard
         RateLimiter::hit('checkout-captcha-required:'.$request->ip(), 60 * 30);
     }
 
+    public function floodPixAttemptCount(Request $request): int
+    {
+        if (! $this->isPixCheckoutRequest($request)) {
+            return 0;
+        }
+
+        return (int) Cache::get($this->floodPixCacheKey($request), 0);
+    }
+
+    public function isFloodPixThresholdExceeded(Request $request): bool
+    {
+        $threshold = max(1, (int) config('checkout_security.flood.pix_attempts_per_minute', 2));
+
+        return $this->floodPixAttemptCount($request) > $threshold;
+    }
+
     public function assertCanCreateCheckout(Request $request, ?Product $product): void
     {
         if (! $this->isEnabled()) {
@@ -144,7 +167,23 @@ class CheckoutAbuseGuard
             }
         }
 
+        $this->assertFloodPixReuse($request);
         $this->assertPendingLimits($request, $product);
+    }
+
+    public function assertFloodPixReuse(Request $request): void
+    {
+        if (! $this->isEnabled() || ! $this->isPixCheckoutRequest($request)) {
+            return;
+        }
+
+        $key = $this->floodPixCacheKey($request);
+        $count = (int) Cache::get($key, 0) + 1;
+        Cache::put($key, $count, now()->addMinute());
+
+        if ($count > max(1, (int) config('checkout_security.flood.pix_attempts_per_minute', 2))) {
+            $this->tryRedirectToExistingPixRelaxed($request);
+        }
     }
 
     public function assertPendingLimits(Request $request, ?Product $product = null): void
@@ -164,6 +203,7 @@ class CheckoutAbuseGuard
                 ->count();
             if ($ipCount >= $maxIp) {
                 $this->tryRedirectToExistingPix($request);
+                $this->tryRedirectToExistingPixRelaxed($request);
                 $this->markCaptchaRequired($request);
                 throw new TooManyRequestsHttpException(300, 'Muitas tentativas de pagamento. Aguarde alguns minutos.');
             }
@@ -179,6 +219,7 @@ class CheckoutAbuseGuard
                 ->count();
             if ($emailCount >= $maxEmail) {
                 $this->tryRedirectToExistingPix($request);
+                $this->tryRedirectToExistingPixRelaxed($request);
                 $this->markCaptchaRequired($request);
                 throw new TooManyRequestsHttpException(300, 'Muitas tentativas de pagamento para este e-mail. Aguarde alguns minutos.');
             }
@@ -191,6 +232,32 @@ class CheckoutAbuseGuard
         if ($order) {
             throw new ExistingPixCheckoutRedirect($order, $request);
         }
+    }
+
+    private function tryRedirectToExistingPixRelaxed(Request $request): void
+    {
+        $order = PendingPixCheckoutResolver::findReusableRelaxed($request);
+        if ($order) {
+            throw new ExistingPixCheckoutRedirect($order, $request, relaxed: true);
+        }
+    }
+
+    private function isPixCheckoutRequest(Request $request): bool
+    {
+        return PendingPixCheckoutResolver::isPixLikePaymentMethod($request->input('payment_method'));
+    }
+
+    private function floodPixCacheKey(Request $request): string
+    {
+        $email = $this->normalizeEmail($request->input('email'));
+        $productId = trim((string) $request->input('product_id', ''));
+
+        return 'checkout_flood_pix:'.sha1($email.'|'.$productId);
+    }
+
+    private function turnstileSiteKey(): string
+    {
+        return CheckoutTurnstileSettings::siteKeyForCheckout();
     }
 
     private function attemptCacheKey(string $type, string $value, ?string $productId): string

@@ -70,8 +70,7 @@ class GatewaysController extends Controller
             if ($type === 'boolean') {
                 $credentialValues[$key] = filter_var($raw, FILTER_VALIDATE_BOOLEAN);
             } elseif (in_array($key, ['secret_key', 'webhook_secret', 'webhook_signing_secret'], true) && $raw !== null && (string) $raw !== '') {
-                // Nunca devolve o segredo ao browser; salvar em branco preserva o valor (update).
-                $credentialValues[$key] = '';
+                $credentialValues[$key] = $this->maskCredentialSecret((string) $raw) ?? '';
             } else {
                 $credentialValues[$key] = $raw !== null && $raw !== '' ? (string) $raw : '';
             }
@@ -106,6 +105,17 @@ class GatewaysController extends Controller
 
         $oauthClientConfigured = false;
 
+        $cajupayDriver = ($slug === 'cajupay' && ($credential?->is_connected ?? false))
+            ? GatewayRegistry::driver('cajupay')
+            : null;
+        $cajupayWebhookMeta = $slug === 'cajupay'
+            ? $this->buildCajuPayWebhookMeta(
+                $decrypted,
+                $credential?->is_connected ?? false,
+                $cajupayDriver instanceof CajuPayDriver ? $cajupayDriver : null
+            )
+            : [];
+
         $payload = [
             'slug' => $gateway['slug'],
             'name' => $gateway['name'],
@@ -124,6 +134,12 @@ class GatewaysController extends Controller
             'webhook_url_secondary' => $webhookUrlSecondary,
             'webhook_signing_secret_set' => $slug === 'cajupay'
                 && ! empty(trim((string) ($decrypted['webhook_signing_secret'] ?? ''))),
+            'webhook_signing_secret_masked' => $cajupayWebhookMeta['webhook_signing_secret_masked'] ?? null,
+            'webhook_auto_configured' => $cajupayWebhookMeta['webhook_auto_configured'] ?? false,
+            'webhook_setup_status' => $cajupayWebhookMeta['webhook_setup_status'] ?? null,
+            'webhook_rotate_url' => $slug === 'cajupay' && Route::has('gateways.cajupay.rotate-webhook')
+                ? route('gateways.cajupay.rotate-webhook')
+                : null,
             'spacepag_keys_configured' => $slug === 'spacepag' && (
                 trim((string) ($decrypted['secret_key'] ?? '')) !== ''
                 || trim((string) ($decrypted['public_key'] ?? '')) !== ''
@@ -277,12 +293,24 @@ class GatewaysController extends Controller
         $credential->setEncryptedCredentials($credentials);
         $credential->save();
 
-        return response()->json([
+        $cajupayMetaDriver = ($slug === 'cajupay' && $isConnected && $driver instanceof CajuPayDriver)
+            ? $driver
+            : null;
+        $cajupayMeta = $slug === 'cajupay'
+            ? $this->buildCajuPayWebhookMeta($credentials, $isConnected, $cajupayMetaDriver)
+            : [];
+
+        $message = $isConnected ? 'Credenciais salvas e conexão verificada.' : 'Credenciais salvas.';
+        if ($slug === 'cajupay' && ($cajupayMeta['webhook_auto_configured'] ?? false)) {
+            $message = 'Credenciais salvas. Webhook configurado automaticamente na CajuPay.';
+        }
+
+        return response()->json(array_merge([
             'success' => true,
             'is_connected' => $isConnected,
-            'message' => $isConnected ? 'Credenciais salvas e conexão verificada.' : 'Credenciais salvas.',
+            'message' => $message,
             'webhook_warning' => $webhookWarning,
-        ]);
+        ], $cajupayMeta));
     }
 
     public function test(Request $request, string $slug): JsonResponse
@@ -401,11 +429,24 @@ class GatewaysController extends Controller
                 ? 'Falha na autenticação. Confira pk_ e sk_ no painel Spacepag (copie sem espaços) e salve de novo.'
                 : 'Falha na autenticação. Verifique as credenciais.';
 
-            return response()->json([
+            $cajupayMeta = ($ok && $slug === 'cajupay')
+                ? $this->buildCajuPayWebhookMeta(
+                    $credentials,
+                    true,
+                    $driver instanceof CajuPayDriver ? $driver : null
+                )
+                : [];
+
+            $testMessage = $ok ? 'Conexão realizada com sucesso.' : $failMessage;
+            if ($ok && $slug === 'cajupay' && ($cajupayMeta['webhook_auto_configured'] ?? false)) {
+                $testMessage = 'Conexão OK. Webhook configurado automaticamente na CajuPay.';
+            }
+
+            return response()->json(array_merge([
                 'success' => $ok,
-                'message' => $ok ? 'Conexão realizada com sucesso.' : $failMessage,
+                'message' => $testMessage,
                 'webhook_warning' => $webhookWarning,
-            ]);
+            ], $cajupayMeta));
         } catch (\Throwable $e) {
             return response()->json([
                 'success' => false,
@@ -414,66 +455,191 @@ class GatewaysController extends Controller
         }
     }
 
+    public function rotateCajuPayWebhookSecret(Request $request): JsonResponse
+    {
+        $tenantId = auth()->user()->tenant_id;
+        $credential = GatewayCredential::forTenant($tenantId)->where('gateway_slug', 'cajupay')->first();
+        if ($credential === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Configure as credenciais CajuPay antes de rotacionar o token do webhook.',
+            ], 422);
+        }
+
+        $credentials = $credential->getDecryptedCredentials();
+        $driver = GatewayRegistry::driver('cajupay');
+        if (! $driver instanceof CajuPayDriver) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Driver CajuPay indisponível.',
+            ], 422);
+        }
+
+        $warning = null;
+        $credentials = $this->ensureCajuPayWebhookRegistered($driver, $credentials, $warning, true);
+
+        $credential->setEncryptedCredentials($credentials);
+        $credential->save();
+
+        $meta = $this->buildCajuPayWebhookMeta($credentials, true, $driver);
+        $hasSecret = ! empty(trim((string) ($credentials['webhook_signing_secret'] ?? '')));
+
+        return response()->json(array_merge([
+            'success' => $hasSecret,
+            'message' => $hasSecret
+                ? 'Token do webhook rotacionado e salvo.'
+                : ($warning ?? 'Não foi possível obter um novo token do webhook.'),
+            'webhook_warning' => $warning,
+        ], $meta), $hasSecret ? 200 : 422);
+    }
+
     /**
-     * Auto-registra (ou rotaciona) o endpoint de webhook na API CajuPay e devolve
-     * o array de credentials atualizado com webhook_endpoint_id e webhook_signing_secret.
-     * Falhas só geram warning para a UI — não impedem o save.
+     * Auto-registra o endpoint de webhook na API CajuPay (idempotente) e devolve
+     * credentials atualizadas com webhook_endpoint_id e webhook_signing_secret.
      *
      * @param  array<string, mixed>  $credentials
      * @param  string|null  $warning  out param
      * @return array<string, mixed>
      */
-    private function ensureCajuPayWebhookRegistered(CajuPayDriver $driver, array $credentials, ?string &$warning): array
-    {
+    private function ensureCajuPayWebhookRegistered(
+        CajuPayDriver $driver,
+        array $credentials,
+        ?string &$warning,
+        bool $forceRotate = false
+    ): array {
         $warning = null;
         try {
             $url = route('webhooks.cajupay');
         } catch (\Throwable) {
             $warning = 'Webhook CajuPay: rota webhooks.cajupay indisponível.';
+
             return $credentials;
         }
 
-        try {
-            $existing = $driver->listWebhookEndpoints($credentials);
-        } catch (\Throwable $e) {
-            $existing = [];
-            Log::debug('GatewaysController: list webhooks CajuPay falhou', ['error' => $e->getMessage()]);
-        }
+        $tenantId = auth()->user()?->tenant_id;
+        $description = 'Getfy'.($tenantId ? ' (tenant #'.$tenantId.')' : '');
 
-        $foundId = null;
-        foreach ($existing as $endpoint) {
-            if (! is_array($endpoint)) {
-                continue;
-            }
-            if (($endpoint['url'] ?? null) === $url) {
-                $foundId = is_string($endpoint['id'] ?? null) ? $endpoint['id'] : null;
-                break;
-            }
-        }
+        $hasLocalSecret = trim((string) ($credentials['webhook_signing_secret'] ?? '')) !== '';
 
-        // Se já existe e já temos signing_secret salvo, mantém — para evitar invalidar
-        // uma assinatura existente sem necessidade.
-        if ($foundId !== null && ! empty($credentials['webhook_endpoint_id']) && ! empty($credentials['webhook_signing_secret'])) {
-            return $credentials;
+        if ($forceRotate) {
+            try {
+                $reg = $driver->registerWebhookEndpoint($credentials, $url, true, $description);
+                $credentials = $this->applyCajuPayWebhookRegistration($credentials, $reg);
+
+                return $credentials;
+            } catch (\Throwable $e) {
+                $warning = 'Falha ao rotacionar token do webhook: '.$e->getMessage();
+                Log::warning('GatewaysController: rotação webhook CajuPay falhou', [
+                    'error' => $e->getMessage(),
+                    'url' => $url,
+                ]);
+
+                return $credentials;
+            }
         }
 
         try {
-            $reg = $driver->registerWebhookEndpoint($credentials, $url, $foundId);
+            $reg = $driver->registerWebhookEndpoint($credentials, $url, false, $description);
+            $credentials = $this->applyCajuPayWebhookRegistration($credentials, $reg);
+
+            if (
+                empty($reg['signing_secret'])
+                && ! $hasLocalSecret
+                && ($reg['already_exists'] ?? false)
+            ) {
+                $reg = $driver->registerWebhookEndpoint($credentials, $url, true, $description);
+                $credentials = $this->applyCajuPayWebhookRegistration($credentials, $reg);
+            }
         } catch (\Throwable $e) {
-            $warning = 'Webhook ainda não registrado: ' . $e->getMessage();
+            $warning = $this->formatCajuPayWebhookError($e->getMessage());
             Log::warning('GatewaysController: registro de webhook CajuPay falhou', [
                 'error' => $e->getMessage(),
                 'url' => $url,
             ]);
+
             return $credentials;
         }
 
+        if (trim((string) ($credentials['webhook_signing_secret'] ?? '')) === '') {
+            $warning = 'Credenciais OK, mas o token do webhook não pôde ser obtido. Use "Rotacionar token" na configuração avançada.';
+        }
+
+        return $credentials;
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @param  array{endpoint_id: string, signing_secret: string|null, created?: bool, already_exists?: bool}  $reg
+     * @return array<string, mixed>
+     */
+    private function applyCajuPayWebhookRegistration(array $credentials, array $reg): array
+    {
         $credentials['webhook_endpoint_id'] = $reg['endpoint_id'];
         if (! empty($reg['signing_secret'])) {
             $credentials['webhook_signing_secret'] = $reg['signing_secret'];
         }
 
         return $credentials;
+    }
+
+    /**
+     * @param  array<string, mixed>  $decrypted
+     * @return array{webhook_signing_secret_set: bool, webhook_signing_secret_masked: string|null, webhook_auto_configured: bool, webhook_setup_status: array<string, mixed>|null}
+     */
+    private function buildCajuPayWebhookMeta(
+        array $decrypted,
+        bool $isConnected,
+        ?CajuPayDriver $driver = null
+    ): array {
+        $secret = trim((string) ($decrypted['webhook_signing_secret'] ?? ''));
+        $endpointId = trim((string) ($decrypted['webhook_endpoint_id'] ?? ''));
+        $secretSet = $secret !== '';
+        $autoConfigured = $secretSet && $endpointId !== '';
+
+        $setupStatus = null;
+        if ($isConnected && $driver instanceof CajuPayDriver && $secretSet) {
+            $setupStatus = $driver->getWebhookSetupStatus($decrypted);
+        }
+
+        return [
+            'webhook_signing_secret_set' => $secretSet,
+            'webhook_signing_secret_masked' => $this->maskWebhookSigningSecret($secret),
+            'webhook_auto_configured' => $autoConfigured,
+            'webhook_setup_status' => $setupStatus,
+        ];
+    }
+
+    private function maskWebhookSigningSecret(string $secret): ?string
+    {
+        return $this->maskCredentialSecret($secret);
+    }
+
+    private function maskCredentialSecret(string $secret): ?string
+    {
+        $secret = trim($secret);
+        if ($secret === '') {
+            return null;
+        }
+
+        $suffix = strlen($secret) >= 4 ? substr($secret, -4) : $secret;
+        $prefix = '';
+        foreach (['cwhsec_', 'gsk_', 'gpk_', 'sk_', 'pk_', 'whsec_'] as $knownPrefix) {
+            if (str_starts_with($secret, $knownPrefix)) {
+                $prefix = $knownPrefix;
+                break;
+            }
+        }
+
+        return $prefix.'••••••••••••'.$suffix;
+    }
+
+    private function formatCajuPayWebhookError(string $message): string
+    {
+        if (stripos($message, 'url_host_blocked_ip') !== false) {
+            return 'Webhook não registrado: a URL precisa ser HTTPS pública (configure APP_URL com seu domínio real).';
+        }
+
+        return 'Webhook ainda não registrado: '.$message;
     }
 
     public function updateCertificate(Request $request, string $slug): JsonResponse

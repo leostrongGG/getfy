@@ -185,6 +185,13 @@ class CajuPayDriver implements GatewayDriver
             return null;
         }
 
+        if ($this->looksLikeUuid($transactionId)) {
+            $directStatus = $this->getPaymentStatusById($transactionId, $credentials);
+            if ($directStatus !== null) {
+                return $directStatus;
+            }
+        }
+
         try {
             $response = $this->httpForCredentials($credentials)
                 ->get('/api/payments', ['limit' => 100]);
@@ -241,6 +248,32 @@ class CajuPayDriver implements GatewayDriver
     private function looksLikeUuid(string $value): bool
     {
         return (bool) preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $value);
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     */
+    private function getPaymentStatusById(string $paymentId, array $credentials): ?string
+    {
+        try {
+            $response = $this->httpForCredentials($credentials)
+                ->get('/api/payments/'.urlencode($paymentId));
+
+            if (! $response->successful()) {
+                return null;
+            }
+
+            $data = $response->json();
+            if (! is_array($data)) {
+                return null;
+            }
+
+            return $this->normalizePaymentStatus($data['status'] ?? null);
+        } catch (\Throwable $e) {
+            Log::debug('CajuPayDriver getPaymentStatusById', ['message' => $e->getMessage()]);
+
+            return null;
+        }
     }
 
     /**
@@ -530,16 +563,17 @@ class CajuPayDriver implements GatewayDriver
     }
 
     /**
-     * Register or rotate-secret a webhook endpoint on CajuPay.
-     *
-     * When $existingId is provided, performs PATCH with rotate_secret to
-     * obtain a fresh signing_secret for an already-registered URL.
+     * Idempotent webhook registration (platform bootstrap — CajuPay module 22).
      *
      * @param  array<string, mixed>  $credentials
-     * @return array{endpoint_id: string, signing_secret: string|null, raw: array<string, mixed>}
+     * @return array{endpoint_id: string, signing_secret: string|null, created: bool, already_exists: bool, raw: array<string, mixed>}
      */
-    public function registerWebhookEndpoint(array $credentials, string $url, ?string $existingId = null): array
-    {
+    public function registerWebhookEndpoint(
+        array $credentials,
+        string $url,
+        bool $rotateIfExists = false,
+        ?string $description = null
+    ): array {
         if (! $this->hasApiKeys($credentials)) {
             throw new \RuntimeException('CajuPay: configure as chaves de API antes de registrar o webhook.');
         }
@@ -547,34 +581,17 @@ class CajuPayDriver implements GatewayDriver
             throw new \RuntimeException('CajuPay: URL do webhook vazia.');
         }
 
-        $http = $this->httpForCredentials($credentials);
+        $host = parse_url($url, PHP_URL_HOST);
+        $desc = $description ?? 'Getfy ('.($host ?: 'webhook').')';
 
         try {
-            if ($existingId !== null && $existingId !== '') {
-                $response = $http->patch('/api/webhooks/endpoints', [
-                    'id' => $existingId,
+            $response = $this->httpForCredentials($credentials)
+                ->post('/api/webhooks/endpoints/register', [
                     'url' => $url,
-                    'enabled' => true,
-                    'rotate_secret' => true,
+                    'description' => $desc,
+                    'event_types' => ['checkout.payment.*', 'pix.payment.*'],
+                    'rotate_if_exists' => $rotateIfExists,
                 ]);
-            } else {
-                $response = $http->post('/api/webhooks/endpoints', [
-                    'url' => $url,
-                    'description' => 'Getfy ('.parse_url($url, PHP_URL_HOST).')',
-                    'event_types' => [
-                        'checkout.payment.paid',
-                        'checkout.payment.failed',
-                        'checkout.payment.refunded',
-                        'checkout.payment.disputed',
-                        'pix.payment.refunded',
-                        // Eventos card.* usados em alguns fluxos internos / docs CajuPay
-                        'card.payment.succeeded',
-                        'card.payment.failed',
-                        'card.payment.refunded',
-                        'card.payment.disputed',
-                    ],
-                ]);
-            }
         } catch (\Throwable $e) {
             throw new \RuntimeException('CajuPay: falha ao contatar o registro de webhooks: '.$e->getMessage(), 0, $e);
         }
@@ -584,6 +601,9 @@ class CajuPayDriver implements GatewayDriver
             if (strlen($msg) > 300) {
                 $msg = substr($msg, 0, 300).'…';
             }
+            if ($response->status() === 403) {
+                throw new \RuntimeException('CajuPay: permissão negada (webhooks.write). Verifique as permissões da chave de API no painel CajuPay.');
+            }
             throw new \RuntimeException('CajuPay: '.($msg !== '' ? $msg : 'Erro ao registrar webhook.'));
         }
 
@@ -592,7 +612,8 @@ class CajuPayDriver implements GatewayDriver
             throw new \RuntimeException('CajuPay: resposta inválida ao registrar webhook.');
         }
 
-        $endpointId = $data['id'] ?? ($existingId ?? null);
+        $endpoint = is_array($data['endpoint'] ?? null) ? $data['endpoint'] : [];
+        $endpointId = $endpoint['id'] ?? ($data['id'] ?? null);
         $signingSecret = $data['signing_secret'] ?? null;
 
         if (! is_string($endpointId) || $endpointId === '') {
@@ -602,8 +623,38 @@ class CajuPayDriver implements GatewayDriver
         return [
             'endpoint_id' => $endpointId,
             'signing_secret' => is_string($signingSecret) && $signingSecret !== '' ? $signingSecret : null,
+            'created' => (bool) ($data['created'] ?? false),
+            'already_exists' => (bool) ($data['already_exists'] ?? false),
             'raw' => $data,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @return array<string, mixed>|null
+     */
+    public function getWebhookSetupStatus(array $credentials): ?array
+    {
+        if (! $this->hasApiKeys($credentials)) {
+            return null;
+        }
+
+        try {
+            $response = $this->httpForCredentials($credentials)
+                ->get('/api/webhooks/setup-status');
+
+            if (! $response->successful()) {
+                return null;
+            }
+
+            $data = $response->json();
+
+            return is_array($data) ? $data : null;
+        } catch (\Throwable $e) {
+            Log::debug('CajuPayDriver getWebhookSetupStatus', ['message' => $e->getMessage()]);
+
+            return null;
+        }
     }
 
     private function normalizePaymentStatus(mixed $status): ?string

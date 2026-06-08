@@ -19,6 +19,8 @@ use App\Models\Setting;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
 use App\Plugins\PluginExtensionRegistry;
+use App\Plugins\PluginHookBus;
+use App\Plugins\PluginProductTypeRegistry;
 use App\Plugins\PluginRegistry;
 use App\Services\StorageService;
 use App\Services\TeamAccessService;
@@ -64,6 +66,7 @@ class ProdutosController extends Controller
             'description' => $config['description'],
             'available' => $config['available'],
         ])->values()->all();
+        $productTypes = array_merge($productTypes, PluginProductTypeRegistry::allForUi());
 
         $billingTypes = collect(Product::billingTypeLabels())->map(fn ($label, $value) => ['value' => $value, 'label' => $label])->values()->all();
 
@@ -74,7 +77,11 @@ class ProdutosController extends Controller
             'exchange_rates' => $this->legacyExchangeRatesMap($tenantCurrencies),
             'tenant_currencies' => $tenantCurrencies,
             'plugin_card_actions' => PluginExtensionRegistry::getNormalizedProductCardActions(),
-            'plugin_form_sections' => PluginExtensionRegistry::getProductFormSections(),
+            'plugin_form_sections' => PluginHookBus::applyFilters(
+                'product.form.sections',
+                PluginExtensionRegistry::getProductFormSections(),
+                null,
+            ),
         ]);
         event(new ProductIndexLoading($data));
         $payload = $data->getArrayCopy();
@@ -93,7 +100,7 @@ class ProdutosController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'slug' => ['nullable', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'type' => ['required', 'string', 'in:'.implode(',', self::TYPES)],
+            'type' => ['required', 'string', 'in:'.implode(',', $this->allowedProductTypes())],
             'billing_type' => ['required', 'string', 'in:'.implode(',', self::BILLING_TYPES)],
             'price' => ['required', 'numeric', 'min:0'],
             'currency' => ['nullable', 'string', 'in:BRL,EUR,USD'],
@@ -106,8 +113,12 @@ class ProdutosController extends Controller
         $validated['currency'] = $validated['currency'] ?? config('products.currency_default', 'BRL');
         $validated['is_active'] = $request->boolean('is_active', true);
 
+        $normalized = PluginProductTypeRegistry::normalizeValidatedType($validated);
+        $validated = $normalized['validated'];
+
         $product = new Product($validated);
         $beforeEvent = new ProductBeforeSave($product, $validated, true);
+        PluginHookBus::doAction('product.before_save', $beforeEvent, $product, $validated, true);
         event($beforeEvent);
         if ($beforeEvent->abort !== null) {
             return back()->with('error', $beforeEvent->abort)->withInput();
@@ -117,6 +128,11 @@ class ProdutosController extends Controller
         $deliverableLink = $validated['deliverable_link'] ?? null;
         unset($validated['deliverable_link']);
         $product = Product::create($validated);
+
+        if (isset($validated['checkout_config']) && is_array($validated['checkout_config'])) {
+            $config = array_merge($product->checkout_config ?? [], $validated['checkout_config']);
+            $product->update(['checkout_config' => $config]);
+        }
 
         if ($request->has('deliverable_link')) {
             $config = $product->checkout_config ?? [];
@@ -382,6 +398,11 @@ class ProdutosController extends Controller
             'cademi_integrations' => $cademiIntegrations,
             'product_pixel_integrations' => $productPixelIntegrations,
             'plugin_product_panels' => PluginRegistry::getProductPanels(),
+            'plugin_form_sections' => PluginHookBus::applyFilters(
+                'product.form.sections',
+                PluginExtensionRegistry::getProductFormSections(),
+                $produto,
+            ),
             'layoutContentFlushLeft' => true,
             'pageTitleBadge' => $produto->name,
         ]);
@@ -495,7 +516,7 @@ class ProdutosController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'slug' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'type' => ['required', 'string', 'in:'.implode(',', self::TYPES)],
+            'type' => ['required', 'string', 'in:'.implode(',', $this->allowedProductTypes())],
             'billing_type' => ['required', 'string', 'in:'.implode(',', self::BILLING_TYPES)],
             'price' => ['required', 'numeric', 'min:0'],
             'combo_product_ids' => ['nullable', 'array'],
@@ -699,7 +720,11 @@ class ProdutosController extends Controller
             $request->input('combo_product_ids', [])
         );
 
+        $normalized = PluginProductTypeRegistry::normalizeValidatedType($validated);
+        $validated = $normalized['validated'];
+
         $beforeEvent = new ProductBeforeSave($produto, $validated, false);
+        PluginHookBus::doAction('product.before_save', $beforeEvent, $produto, $validated, false);
         event($beforeEvent);
         if ($beforeEvent->abort !== null) {
             return back()->with('error', $beforeEvent->abort)->withInput();
@@ -1513,5 +1538,13 @@ class ProdutosController extends Controller
             'brl_eur' => CheckoutCustomPriceByCurrency::rateToBrlForCode($tenantCurrencies, 'EUR') ?: (float) ($rates['brl_eur'] ?? 0.16),
             'brl_usd' => CheckoutCustomPriceByCurrency::rateToBrlForCode($tenantCurrencies, 'USD') ?: (float) ($rates['brl_usd'] ?? 0.18),
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function allowedProductTypes(): array
+    {
+        return PluginProductTypeRegistry::allowedTypeValues(self::TYPES);
     }
 }

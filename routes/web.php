@@ -140,7 +140,7 @@ Route::get('/api-checkout/card-confirm', [\App\Http\Controllers\ApiCheckoutContr
 Route::get('/api-checkout/obrigado', [\App\Http\Controllers\ApiCheckoutController::class, 'thankYou'])->name('api-checkout.thank-you');
 
 // Commerce (loja / carrinho multi-produto — core para plugins de vitrine)
-Route::middleware(['web', 'throttle:120,1', \App\Http\Middleware\ResolveStorefrontTenant::class])
+Route::middleware(['web', 'throttle:120,1', \App\Http\Middleware\ResolveStorefrontTenant::class, 'plugin.commerce.scope'])
     ->prefix('commerce')
     ->group(function () {
         Route::get('/catalog/products', [\App\Http\Controllers\Commerce\CommerceCatalogController::class, 'products'])->name('commerce.catalog.products');
@@ -155,10 +155,11 @@ Route::middleware(['web', 'throttle:120,1', \App\Http\Middleware\ResolveStorefro
 
 Route::get('/commerce/checkout/{token}', [\App\Http\Controllers\Commerce\CommerceCheckoutController::class, 'show'])
     ->name('commerce.checkout.show')
+    ->middleware(['plugin.commerce.scope'])
     ->where('token', '[a-zA-Z0-9]{32,64}');
 Route::post('/commerce/checkout/pay', [\App\Http\Controllers\Commerce\CommerceCheckoutController::class, 'process'])
     ->name('commerce.checkout.process')
-    ->middleware(['checkout.reuse-pix', 'throttle:checkout-process', 'throttle:checkout-pix', 'throttle:checkout-card', 'checkout.abuse']);
+    ->middleware(['plugin.commerce.scope', 'checkout.reuse-pix', 'throttle:checkout-process', 'throttle:checkout-pix', 'throttle:checkout-card', 'checkout.abuse']);
 
 Route::get('/c/{slug}', [\App\Http\Controllers\CheckoutController::class, 'show'])
     ->name('checkout.show')
@@ -546,6 +547,8 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::get('/configuracoes/gateways/{slug}', [\App\Http\Controllers\GatewaysController::class, 'show'])->name('gateways.show');
         Route::put('/configuracoes/gateways/{slug}', [\App\Http\Controllers\GatewaysController::class, 'update'])->name('gateways.update');
         Route::post('/configuracoes/gateways/{slug}/test', [\App\Http\Controllers\GatewaysController::class, 'test'])->name('gateways.test');
+        Route::post('/configuracoes/gateways/cajupay/rotate-webhook-secret', [\App\Http\Controllers\GatewaysController::class, 'rotateCajuPayWebhookSecret'])
+            ->name('gateways.cajupay.rotate-webhook');
     });
     // Upload de arquivo (PHP/Laravel lida melhor via POST)
     Route::post('/configuracoes/gateways/{slug}/certificate', [\App\Http\Controllers\GatewaysController::class, 'updateCertificate'])
@@ -607,6 +610,8 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::put('/integracoes/cademi/{cademi}', [\App\Http\Controllers\CademiController::class, 'update'])->name('integrations.cademi.update');
         Route::delete('/integracoes/cademi/{cademi}', [\App\Http\Controllers\CademiController::class, 'destroy'])->name('integrations.cademi.destroy');
     Route::get('/integracoes/cademi/{cademi}/tags', [\App\Http\Controllers\CademiController::class, 'tags'])->name('integrations.cademi.tags');
+
+        Route::put('/integracoes/checkout-security', [\App\Http\Controllers\Integrations\CheckoutSecurityController::class, 'update'])->name('integrations.checkout-security.update');
 
         Route::post('/integracoes/conversion-pixels', [\App\Http\Controllers\ConversionPixelIntegrationController::class, 'store'])->name('integrations.conversion-pixels.store');
         Route::put('/integracoes/conversion-pixels/{conversionPixelIntegration}', [\App\Http\Controllers\ConversionPixelIntegrationController::class, 'update'])->name('integrations.conversion-pixels.update');

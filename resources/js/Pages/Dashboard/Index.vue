@@ -1,9 +1,10 @@
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
 import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import DashboardClassicView from '@/components/dashboard/DashboardClassicView.vue';
 import TrackingPanel from '@/components/dashboard/tracking/TrackingPanel.vue';
 import { useTrackingPanel } from '@/composables/useTrackingPanel';
+import PluginSlotHost from '@/components/plugins/PluginSlotHost.vue';
 
 defineOptions({ layout: LayoutInfoprodutor });
 
@@ -25,6 +26,13 @@ const props = defineProps({
 });
 
 const valuesVisible = ref(true);
+
+const dashboardLinkWidgets = computed(() =>
+    (props.plugin_dashboard_widgets || []).filter((w) => w.route && w.ui_mode !== 'runtime'),
+);
+const dashboardRuntimeWidgets = computed(() =>
+    (props.plugin_dashboard_widgets || []).filter((w) => w.ui_mode === 'runtime' && w.ui_export),
+);
 const {
     isOpen,
     loading,
@@ -97,18 +105,27 @@ async function handleSavePeriod(amount) {
                     @open-tracking="openTracking"
                 />
                 <div
-                    v-if="(plugin_dashboard_widgets || []).length"
-                    class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+                    v-if="dashboardLinkWidgets.length || dashboardRuntimeWidgets.length"
+                    class="space-y-4"
                 >
-                    <a
-                        v-for="w in plugin_dashboard_widgets"
-                        :key="w.id"
-                        v-show="w.route"
-                        :href="w.route"
-                        class="panel-card block p-4 text-sm font-medium text-zinc-800 dark:text-zinc-100"
+                    <div
+                        v-if="dashboardLinkWidgets.length"
+                        class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
                     >
-                        {{ w.label || w.id }}
-                    </a>
+                        <a
+                            v-for="w in dashboardLinkWidgets"
+                            :key="w.id"
+                            :href="w.route"
+                            class="panel-card block p-4 text-sm font-medium text-zinc-800 dark:text-zinc-100"
+                        >
+                            {{ w.label || w.id }}
+                        </a>
+                    </div>
+                    <PluginSlotHost
+                        v-if="dashboardRuntimeWidgets.length"
+                        layout="grid"
+                        :items="dashboardRuntimeWidgets"
+                    />
                 </div>
             </div>
         </Transition>

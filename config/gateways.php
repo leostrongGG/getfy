@@ -24,14 +24,25 @@ return [
             'signup_url' => 'https://cajupay.com.br',
             'driver' => \App\Gateways\CajuPay\CajuPayDriver::class,
             'credential_keys' => [
-                ['key' => 'public_key', 'label' => 'Chave pública', 'type' => 'text'],
-                ['key' => 'secret_key', 'label' => 'Chave secreta', 'type' => 'password'],
+                [
+                    'key' => 'public_key',
+                    'label' => 'Chave pública',
+                    'type' => 'text',
+                    'hint' => 'Chave gpk_… do painel CajuPay. Ao salvar, o Getfy registra o webhook automaticamente na API.',
+                ],
+                [
+                    'key' => 'secret_key',
+                    'label' => 'Chave secreta',
+                    'type' => 'password',
+                    'hint' => 'Chave gsk_… do painel CajuPay. Necessária junto com a chave pública.',
+                ],
                 [
                     'key' => 'webhook_signing_secret',
                     'label' => 'Token do webhook (signing secret)',
                     'type' => 'password',
                     'optional' => true,
-                    'hint' => 'Cole o token no formato cwhsec_… exibido uma vez no painel CajuPay (Webhooks) ou na resposta do POST /api/webhooks/endpoints. Necessário para validar as notificações de pagamento no Getfy. Deixe em branco ao salvar para manter o token já gravado.',
+                    'advanced' => true,
+                    'hint' => 'Preenchido automaticamente ao salvar as chaves. Só edite se rotacionou manualmente no painel CajuPay. Deixe em branco ao salvar para manter o token já gravado.',
                 ],
             ],
         ],

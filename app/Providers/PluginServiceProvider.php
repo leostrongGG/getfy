@@ -3,8 +3,12 @@
 namespace App\Providers;
 
 use App\Plugins\PluginApiRouteRegistrar;
+use App\Plugins\PluginCapabilityRegistry;
+use App\Plugins\PluginClassAutoloader;
+use App\Plugins\PluginMiddlewareRegistry;
 use App\Plugins\PluginPublicRouteRegistrar;
 use App\Plugins\PluginRegistry;
+use App\Plugins\ThemeEngine;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
@@ -12,16 +16,6 @@ use Illuminate\Support\ServiceProvider;
 
 class PluginServiceProvider extends ServiceProvider
 {
-    /** @var list<string> */
-    private const ALLOWED_MIDDLEWARE = [
-        'web',
-        'auth',
-        'throttle:60,1',
-        'throttle:120,1',
-        'role:admin|infoprodutor',
-        'verified',
-    ];
-
     public function register(): void
     {
         //
@@ -30,9 +24,12 @@ class PluginServiceProvider extends ServiceProvider
     public function boot(): void
     {
         PluginRegistry::migrateLegacyPluginInstallDirectories();
+        PluginClassAutoloader::register();
 
         $plugins = $this->getPluginsToLoad();
+        PluginClassAutoloader::refreshPrefixes();
         foreach ($plugins as $plugin) {
+            PluginCapabilityRegistry::registerFromManifest($plugin);
             $this->loadPluginBootstrap($plugin);
             $this->loadPluginMigrations($plugin);
             $this->loadPluginEvents($plugin);
@@ -44,6 +41,8 @@ class PluginServiceProvider extends ServiceProvider
             $this->loadPluginViews($plugin);
             $this->loadPluginMiddleware($plugin);
         }
+
+        ThemeEngine::registerViewNamespaces();
     }
 
     /**
@@ -181,7 +180,7 @@ class PluginServiceProvider extends ServiceProvider
         $extra = $plugin['middleware'] ?? null;
         if (is_array($extra)) {
             foreach ($extra as $mw) {
-                if (is_string($mw) && in_array($mw, self::ALLOWED_MIDDLEWARE, true)) {
+                if (is_string($mw) && PluginMiddlewareRegistry::isAllowedForPanel($mw)) {
                     $middleware[] = $mw;
                 }
             }

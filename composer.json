@@ -31,8 +31,12 @@
         "psr-4": {
             "App\\": "app/",
             "Database\\Factories\\": "database/factories/",
-            "Database\\Seeders\\": "database/seeders/"
-        }
+            "Database\\Seeders\\": "database/seeders/",
+            "Plugins\\GetfyLojaFisica\\": "plugins/getfy-loja-fisica/src/"
+        },
+        "files": [
+            "app/helpers/plugin-hooks.php"
+        ]
     },
     "autoload-dev": {
         "psr-4": {

@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Plugins\PluginRegistry;
+use App\Plugins\ThemeEngine;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
 
@@ -29,6 +30,8 @@ class WhiteLabelBranding
 
     public static function apply(?Request $request = null): void
     {
+        ThemeEngine::apply($request);
+
         if (! self::isPluginEnabled()) {
             return;
         }

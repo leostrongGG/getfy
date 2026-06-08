@@ -124,7 +124,7 @@ class AppServiceProvider extends ServiceProvider
         $checkoutPixPer5Min = max(1, (int) config('checkout_security.rate.pix_per_5_minutes', 6));
         RateLimiter::for('checkout-pix', function (Request $request) use ($checkoutPixPer5Min) {
             $method = strtolower((string) $request->input('payment_method', ''));
-            if ($method !== 'pix') {
+            if (! in_array($method, ['pix', 'pix_auto'], true)) {
                 return Limit::none();
             }
 

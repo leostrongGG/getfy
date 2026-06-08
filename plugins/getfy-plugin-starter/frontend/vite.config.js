@@ -5,7 +5,18 @@ import { writeFileSync } from 'fs';
 
 const slug = 'getfy-plugin-starter';
 
+const processShim = 'typeof globalThis.process>"u"&&(globalThis.process={env:{NODE_ENV:"production"}});';
+
 export default defineConfig({
+    resolve: {
+        alias: {
+            '@getfy/plugin-sdk': resolve(__dirname, '../../../resources/js/plugin-sdk'),
+        },
+    },
+    define: {
+        'process.env.NODE_ENV': JSON.stringify('production'),
+        'process.env': JSON.stringify({ NODE_ENV: 'production' }),
+    },
     plugins: [
         vue(),
         {
@@ -33,8 +44,9 @@ export default defineConfig({
             fileName: () => 'plugin-ui.js',
         },
         rollupOptions: {
+            external: ['vue'],
             output: {
-                banner: `const __GETFY_PLUGIN_SLUG__ = '${slug}';`,
+                banner: `const __GETFY_PLUGIN_SLUG__ = '${slug}';${processShim}`,
             },
         },
     },

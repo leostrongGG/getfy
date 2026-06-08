@@ -9,9 +9,11 @@ import {
     CreditCard,
     ChevronRight,
     X,
+    Truck,
 } from 'lucide-vue-next';
 import Button from '@/components/ui/Button.vue';
 import Toggle from '@/components/ui/Toggle.vue';
+import PluginSlotHost from '@/components/plugins/PluginSlotHost.vue';
 
 const props = defineProps({
     open: { type: Boolean, default: false },
@@ -31,7 +33,15 @@ const typeIcons = {
     area_membros: Users,
     link: Link,
     link_pagamento: CreditCard,
+    produto_fisico: Truck,
 };
+
+function iconForType(type) {
+    if (type?.icon && typeIcons[type.icon]) {
+        return typeIcons[type.icon];
+    }
+    return typeIcons[type.value] || BookOpen;
+}
 
 const form = useForm({
     name: '',
@@ -158,7 +168,7 @@ watch(
                                     class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white dark:bg-zinc-700"
                                 >
                                     <component
-                                        :is="typeIcons[t.value] || BookOpen"
+                                        :is="iconForType(t)"
                                         class="h-5 w-5 text-zinc-600 dark:text-zinc-300"
                                     />
                                 </span>
@@ -301,14 +311,12 @@ watch(
                         <div class="flex items-center gap-2">
                             <Toggle v-model="form.is_active" label="Produto ativo" />
                         </div>
-                        <!-- Área para plugins -->
                         <div v-if="pluginFormSections?.length" class="space-y-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                            <template v-for="(section, idx) in pluginFormSections" :key="idx">
-                                <div v-if="section.html" v-html="section.html" />
-                                <div v-else-if="section.slot" class="text-sm text-zinc-500">
-                                    {{ section.slot }}
-                                </div>
-                            </template>
+                            <PluginSlotHost
+                                layout="stack"
+                                :items="pluginFormSections"
+                                :context="{ isCreate: true }"
+                            />
                         </div>
                         <div class="flex gap-2 pt-2">
                             <Button type="submit" :disabled="form.processing">

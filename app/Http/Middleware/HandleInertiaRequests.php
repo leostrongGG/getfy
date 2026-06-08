@@ -7,7 +7,11 @@ use App\Models\MemberNotification;
 use App\Models\MemberPushSubscription;
 use App\Models\PanelNotification;
 use App\Plugins\PluginExtensionRegistry;
+use App\Plugins\PluginAssetQueue;
+use App\Plugins\PluginCapabilityRegistry;
+use App\Plugins\PluginHookBus;
 use App\Plugins\PluginRegistry;
+use App\Plugins\ThemeEngine;
 use App\Services\RefundService;
 use App\Services\SalesAchievementsService;
 use App\Services\StorageService;
@@ -50,7 +54,10 @@ class HandleInertiaRequests extends Middleware
 
         $path = $request->path();
         $isMemberArea = str_starts_with($path, 'm/') || $request->attributes->get('member_area_slug');
-        $isCheckout = str_starts_with($path, 'c/') || str_starts_with($path, 'checkout') || str_starts_with($path, 'api-checkout');
+        $isCheckout = str_starts_with($path, 'c/')
+            || str_starts_with($path, 'checkout')
+            || str_starts_with($path, 'api-checkout')
+            || str_starts_with($path, 'commerce/checkout');
         $skipPanelPwa = $isMemberArea || $isCheckout;
         $isPanelContext = $user && $user->canAccessPanel() && ! $isMemberArea && ! $isCheckout;
 
@@ -65,7 +72,8 @@ class HandleInertiaRequests extends Middleware
 
         $publicBranding = $this->buildPublicBranding();
 
-        $pageTitle = $this->pageTitleForRoute($request->route()?->getName());
+        $pageTitle = $this->pageTitleForPluginRequest($request)
+            ?? $this->pageTitleForRoute($request->route()?->getName());
 
         $pluginNavItems = [];
         $plugins = [];
@@ -75,7 +83,7 @@ class HandleInertiaRequests extends Middleware
         $settingsPluginTabs = [];
         if ($isPanelContext) {
             $settingsPluginTabs = PluginRegistry::getSettingsTabs();
-            $pluginNavItems = PluginRegistry::getMenuItems();
+            $pluginNavItems = PluginHookBus::applyFilters('panel.menu', PluginRegistry::getMenuItems(), $request);
             $vapidPublic = config('getfy.pwa.vapid_public');
             $pushEnabled = ! empty($vapidPublic) && ! empty(config('getfy.pwa.vapid_private'));
             $installed = PluginRegistry::installed();
@@ -170,6 +178,24 @@ class HandleInertiaRequests extends Middleware
             'member_push_subscribed' => $memberPushSubscribed,
             'refund_eligibility' => $refundEligibility,
             'show_student_hub_link' => $showStudentHubLink,
+            'theme_tokens' => ThemeEngine::tokensForRequest($request, $tenantId),
+            'plugin_assets' => (function () use ($request) {
+                $ctx = PluginAssetQueue::contextForRequest($request);
+
+                return [
+                    'context' => $ctx,
+                    'styles' => PluginAssetQueue::stylesFor($ctx),
+                    'scripts' => PluginAssetQueue::scriptsFor($ctx),
+                ];
+            })(),
+            'plugin_panel_assets' => [
+                'styles' => PluginAssetQueue::stylesFor(PluginAssetQueue::contextForRequest($request)),
+                'scripts' => PluginAssetQueue::scriptsFor(PluginAssetQueue::contextForRequest($request)),
+            ],
+            'plugin_capabilities' => PluginCapabilityRegistry::all(),
+            'plugin_render_zones' => $isPanelContext || $isCheckout || $isMemberArea
+                ? PluginExtensionRegistry::getAllRenderZones()
+                : [],
         ];
 
         if (! $skipPanelPwa) {
@@ -178,7 +204,38 @@ class HandleInertiaRequests extends Middleware
             $shared['pwa_sw_scope'] = '/painel/';
         }
 
-        return $shared;
+        return PluginHookBus::applyFilters('inertia.shared', $shared, $request);
+    }
+
+    private function pageTitleForPluginRequest(\Illuminate\Http\Request $request): ?string
+    {
+        $user = $request->user();
+        if (! $user || ! $user->canAccessPanel()) {
+            return null;
+        }
+
+        $segments = $request->segments();
+        if (count($segments) < 2) {
+            return null;
+        }
+
+        $slug = (string) $segments[0];
+        $plugin = collect(PluginRegistry::enabled())->firstWhere('slug', $slug);
+        if (! is_array($plugin)) {
+            return null;
+        }
+
+        $path = '/'.$slug.'/'.($segments[1] ?? '');
+        foreach (PluginRegistry::getMenuItems() as $item) {
+            $href = trim((string) ($item['href'] ?? ''));
+            if ($href === $path) {
+                $label = trim((string) ($item['name'] ?? $item['label'] ?? ''));
+
+                return $label !== '' ? $label : null;
+            }
+        }
+
+        return trim((string) ($plugin['name'] ?? '')) ?: null;
     }
 
     private function pageTitleForRoute(?string $name): ?string

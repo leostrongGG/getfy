@@ -7,6 +7,7 @@ import FinanceiroPartnerPayoutsTab from '@/components/financeiro/FinanceiroPartn
 import FinanceiroCajupayGate from '@/components/financeiro/FinanceiroCajupayGate.vue';
 import FinanceiroCajupayHint from '@/components/financeiro/FinanceiroCajupayHint.vue';
 import BetaBadge from '@/components/ui/BetaBadge.vue';
+import PluginSlotHost from '@/components/plugins/PluginSlotHost.vue';
 
 defineOptions({ layout: LayoutInfoprodutor });
 
@@ -22,6 +23,7 @@ const props = defineProps({
     min_payout_cents: { type: Number, default: 100 },
     summary: { type: Object, default: () => ({}) },
     partner_payouts: { type: Object, default: () => ({ items: [], summary: {} }) },
+    plugin_financeiro_tabs: { type: Array, default: () => [] },
 });
 
 const activeTab = ref('wallet');
@@ -97,6 +99,18 @@ function onReload() {
                         {{ partner_payouts.summary.pending_count }}
                     </span>
                 </button>
+                <button
+                    v-for="tab in plugin_financeiro_tabs"
+                    :key="tab.id || tab.plugin_slug"
+                    type="button"
+                    class="rounded-lg px-4 py-2 text-sm font-medium transition"
+                    :class="activeTab === `plugin-${tab.id}`
+                        ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-white'
+                        : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'"
+                    @click="activeTab = `plugin-${tab.id}`"
+                >
+                    {{ tab.label || tab.id }}
+                </button>
             </nav>
 
             <div v-show="activeTab === 'wallet'" class="min-h-0">
@@ -124,6 +138,19 @@ function onReload() {
             :partner-payouts="partner_payouts"
             :can-manage="canManageFinanceiro"
         />
+            </div>
+
+            <div
+                v-for="tab in plugin_financeiro_tabs"
+                :key="`panel-${tab.id}`"
+                v-show="activeTab === `plugin-${tab.id}`"
+                class="min-h-0"
+            >
+                <PluginSlotHost
+                    layout="stack"
+                    :items="[tab]"
+                    :context="{ tab }"
+                />
             </div>
         </div>
         </FinanceiroCajupayGate>

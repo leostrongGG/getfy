@@ -239,6 +239,7 @@ class PluginRegistry
                     'checkout_builder_templates' => $manifest['checkout_builder_templates'] ?? null,
                     'product_card_actions' => $manifest['product_card_actions'] ?? null,
                     'product_form_sections' => $manifest['product_form_sections'] ?? null,
+                    'checkout_extensions' => $manifest['checkout_extensions'] ?? null,
                     'dashboard_widgets' => $manifest['dashboard_widgets'] ?? null,
                     'member_area_panels' => $manifest['member_area_panels'] ?? null,
                     'order_fulfillment_providers' => $manifest['order_fulfillment_providers'] ?? null,
@@ -250,6 +251,9 @@ class PluginRegistry
                     'commands' => $manifest['commands'] ?? null,
                     'schedule' => $manifest['schedule'] ?? null,
                     'middleware' => $manifest['middleware'] ?? null,
+                    'theme' => $manifest['theme'] ?? null,
+                    'capabilities' => $manifest['capabilities'] ?? null,
+                    'render_zones' => $manifest['render_zones'] ?? null,
                 ];
 
                 // Uma instalação persistente (ex.: ZIP) no mesmo slug sobrescreve a pasta bundled.
@@ -257,7 +261,7 @@ class PluginRegistry
                 // de uma deteção anterior (ex.: integração / painel no produto).
                 if (isset($bySlug[$slug])) {
                     $prev = $bySlug[$slug];
-                    foreach (['integration_app', 'product_panel', 'settings_tab'] as $uiKey) {
+                    foreach (['integration_app', 'product_panel', 'settings_tab', 'theme', 'capabilities', 'render_zones'] as $uiKey) {
                         $val = $row[$uiKey] ?? null;
                         if ($val === null || (is_array($val) && $val === [])) {
                             $p = $prev[$uiKey] ?? null;
@@ -315,20 +319,10 @@ class PluginRegistry
             if (! is_array($tab)) {
                 continue;
             }
-            $id = trim((string) ($tab['id'] ?? ''));
-            $label = trim((string) ($tab['label'] ?? ''));
-            $component = trim((string) ($tab['component'] ?? ''));
-            if ($id === '' || $label === '' || $component === '') {
-                continue;
+            $accepted = self::acceptUiSlot($plugin, $tab, 'settings', ['id', 'label']);
+            if ($accepted !== null) {
+                $items[] = $accepted;
             }
-            if (! self::isValidUiComponentDeclaration($plugin, $component, 'settings')) {
-                continue;
-            }
-            $items[] = PluginExtensionRegistry::enrichUiSlotItem($plugin, [
-                'id' => $id,
-                'label' => $label,
-                'component' => $component,
-            ], 'settings');
         }
 
         return $items;
@@ -349,11 +343,7 @@ class PluginRegistry
             }
             $id = trim((string) ($app['id'] ?? $plugin['slug'] ?? ''));
             $name = trim((string) ($app['name'] ?? $plugin['name'] ?? $id));
-            $component = trim((string) ($app['component'] ?? ''));
-            if ($id === '' || $name === '' || $component === '') {
-                continue;
-            }
-            if (! self::isValidUiComponentDeclaration($plugin, $component, 'integrations')) {
+            if ($id === '' || $name === '') {
                 continue;
             }
             $description = isset($app['description']) ? trim((string) $app['description']) : '';
@@ -367,13 +357,15 @@ class PluginRegistry
                     $image = '';
                 }
             }
-            $items[] = PluginExtensionRegistry::enrichUiSlotItem($plugin, [
+            $accepted = self::acceptUiSlot($plugin, array_merge($app, [
                 'id' => $id,
                 'name' => $name,
                 'description' => $description !== '' ? $description : null,
                 'image' => $image !== '' && $image !== null ? $image : null,
-                'component' => $component,
-            ], 'integrations');
+            ]), 'integrations', ['id', 'name']);
+            if ($accepted !== null) {
+                $items[] = $accepted;
+            }
         }
 
         return $items;
@@ -392,23 +384,54 @@ class PluginRegistry
             if (! is_array($panel)) {
                 continue;
             }
-            $id = trim((string) ($panel['id'] ?? $plugin['slug'] ?? ''));
-            $label = trim((string) ($panel['label'] ?? $plugin['name'] ?? $id));
-            $component = trim((string) ($panel['component'] ?? ''));
-            if ($id === '' || $label === '' || $component === '') {
-                continue;
+            $accepted = self::acceptUiSlot($plugin, $panel, 'product_panel', ['id', 'label']);
+            if ($accepted !== null) {
+                $items[] = $accepted;
             }
-            if (! self::isValidUiComponentDeclaration($plugin, $component, 'product_panel')) {
-                continue;
-            }
-            $items[] = PluginExtensionRegistry::enrichUiSlotItem($plugin, [
-                'id' => $id,
-                'label' => $label,
-                'component' => $component,
-            ], 'product_panel');
         }
 
         return $items;
+    }
+
+    /**
+     * Aceita slot de UI legado (Plugin/...) ou runtime (frontend.exports + dist).
+     *
+     * @param  array<string, mixed>  $plugin
+     * @param  array<string, mixed>  $item
+     * @param  list<string>  $requiredKeys
+     * @return array<string, mixed>|null
+     */
+    public static function acceptUiSlot(array $plugin, array $item, string $slot, array $requiredKeys = ['id', 'label']): ?array
+    {
+        foreach ($requiredKeys as $key) {
+            $val = trim((string) ($item[$key] ?? ''));
+            if ($val === '') {
+                $fallback = $key === 'label' ? ($item['name'] ?? $plugin['name'] ?? '') : ($plugin['slug'] ?? '');
+                $val = trim((string) $fallback);
+            }
+            if ($val === '') {
+                return null;
+            }
+            $item[$key] = $val;
+        }
+
+        $component = trim((string) ($item['component'] ?? ''));
+        if ($component !== '' && str_starts_with($component, 'Plugin/')) {
+            return PluginExtensionRegistry::enrichUiSlotItem($plugin, $item, $slot);
+        }
+        if (PluginExtensionRegistry::hasRuntimeFrontend($plugin)) {
+            $export = PluginExtensionRegistry::resolveExportForSlot($plugin, $slot);
+            if ($export !== null && $export !== '') {
+                $item['component'] = $component;
+
+                return PluginExtensionRegistry::enrichUiSlotItem($plugin, $item, $slot);
+            }
+        }
+        if ($component !== '' && self::isValidUiComponentDeclaration($plugin, $component, $slot)) {
+            return PluginExtensionRegistry::enrichUiSlotItem($plugin, $item, $slot);
+        }
+
+        return null;
     }
 
     /**
@@ -417,7 +440,8 @@ class PluginRegistry
     private static function isValidUiComponentDeclaration(array $plugin, string $component, string $slot): bool
     {
         if ($component === '') {
-            return false;
+            return PluginExtensionRegistry::hasRuntimeFrontend($plugin)
+                && PluginExtensionRegistry::resolveExportForSlot($plugin, $slot) !== null;
         }
         if (str_starts_with($component, 'Plugin/')) {
             return true;
@@ -493,6 +517,10 @@ class PluginRegistry
         $errors = array_merge($errors, self::validateDistSize($pluginPath));
         $errors = array_merge($errors, self::validateApiRoutesFile($pluginPath, $manifest));
         $errors = array_merge($errors, self::validateCommerceScopes($manifest));
+        $errors = array_merge($errors, self::validateTheme($manifest));
+        $errors = array_merge($errors, self::validateCapabilities($manifest));
+        $errors = array_merge($errors, self::validateRenderZones($manifest));
+        $errors = array_merge($errors, PluginMiddlewareRegistry::validateManifestEntries($manifest));
         $routes = $manifest['routes'] ?? null;
         if (is_string($routes) && $routes !== '') {
             $routesFile = $pluginPath.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $routes);
@@ -546,6 +574,98 @@ class PluginRegistry
         foreach ($scopes as $scope) {
             if (! is_string($scope) || ! in_array($scope, $allowed, true)) {
                 return ['commerce_scopes contém valor inválido: '.(string) $scope];
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $manifest
+     * @return array<int, string>
+     */
+    private static function validateTheme(array $manifest): array
+    {
+        $theme = $manifest['theme'] ?? null;
+        if ($theme === null) {
+            return [];
+        }
+        if (! is_array($theme)) {
+            return ['theme deve ser um objeto.'];
+        }
+        $allowedTargets = ['panel', 'checkout', 'member_area', 'public', 'all'];
+        $targets = $theme['targets'] ?? null;
+        if ($targets !== null) {
+            if (! is_array($targets)) {
+                return ['theme.targets deve ser um array.'];
+            }
+            foreach ($targets as $target) {
+                if (! is_string($target) || ! in_array($target, $allowedTargets, true)) {
+                    return ['theme.targets contém valor inválido: '.(string) $target];
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $manifest
+     * @return array<int, string>
+     */
+    private static function validateCapabilities(array $manifest): array
+    {
+        $capabilities = $manifest['capabilities'] ?? null;
+        if ($capabilities === null) {
+            return [];
+        }
+        if (! is_array($capabilities)) {
+            return ['capabilities deve ser um array.'];
+        }
+        foreach ($capabilities as $cap) {
+            if (is_string($cap)) {
+                if (trim($cap) === '') {
+                    return ['capabilities contém string vazia.'];
+                }
+                continue;
+            }
+            if (is_array($cap)) {
+                $id = trim((string) ($cap['id'] ?? ''));
+                if ($id === '') {
+                    return ['capabilities: cada objeto deve ter id.'];
+                }
+                continue;
+            }
+
+            return ['capabilities contém entrada inválida.'];
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $manifest
+     * @return array<int, string>
+     */
+    private static function validateRenderZones(array $manifest): array
+    {
+        $zones = $manifest['render_zones'] ?? null;
+        if ($zones === null) {
+            return [];
+        }
+        if (! is_array($zones)) {
+            return ['render_zones deve ser um objeto.'];
+        }
+        foreach ($zones as $zoneId => $decl) {
+            if (! is_string($zoneId) || trim($zoneId) === '') {
+                return ['render_zones contém chave de zona inválida.'];
+            }
+            if (! is_array($decl)) {
+                return ["render_zones.{$zoneId} deve ser um objeto."];
+            }
+            $export = trim((string) ($decl['export'] ?? ''));
+            if ($export === '') {
+                return ["render_zones.{$zoneId} requer export."];
             }
         }
 

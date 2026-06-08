@@ -15,6 +15,9 @@ import {
     requestPagarmeTokenFromForm,
     resetPagarmeTokenizeScriptState,
 } from '@/composables/usePagarmeTokenizecard.js';
+import { registerPluginCheckoutComponents } from '@/composables/usePluginCheckoutRegistry';
+import { usePluginComponentResolver } from '@/composables/usePluginComponentResolver';
+import PluginRenderZone from '@/components/plugins/PluginRenderZone.vue';
 
 defineOptions({ layout: null });
 
@@ -49,11 +52,52 @@ const props = defineProps({
     card_pagarme_api_base_url: { type: String, default: 'https://api.pagar.me/core/v5' },
     commerce_checkout: { type: Boolean, default: false },
     commerce_line_items: { type: Array, default: () => [] },
+    payment_summary: { type: Array, default: () => [] },
+    checkout_extra: { type: Object, default: () => ({}) },
+    plugin_checkout_extensions: { type: Array, default: () => [] },
 });
 
 const payUrl = computed(() => (props.commerce_checkout ? '/commerce/checkout/pay' : '/api-checkout/pay'));
 
 const page = usePage();
+const pluginPagesGlob = import.meta.glob('@/PluginPages/**/*.vue');
+const { resolve: resolvePluginComponent } = usePluginComponentResolver(
+    computed(() => page.props.plugin_ui),
+    pluginPagesGlob,
+);
+const pluginCheckoutData = ref({});
+
+function onPluginCheckoutUpdate(slug, data) {
+    pluginCheckoutData.value = {
+        ...pluginCheckoutData.value,
+        [slug]: data,
+    };
+}
+
+function pluginCheckoutPayload(extra = {}) {
+    const payload = { ...extra };
+    if (pluginCheckoutData.value && Object.keys(pluginCheckoutData.value).length > 0) {
+        payload.plugin_checkout_data = JSON.stringify(pluginCheckoutData.value);
+    }
+
+    return payload;
+}
+
+function postPay(extra = {}, options = {}) {
+    router.post(payUrl.value, pluginCheckoutPayload(extra), {
+        preserveScroll: true,
+        onError,
+        ...options,
+    });
+}
+
+function postFormWithPluginData(form, options = {}) {
+    form.transform((data) => pluginCheckoutPayload(data)).post(payUrl.value, {
+        preserveScroll: true,
+        onError,
+        ...options,
+    });
+}
 const flashError = computed(() => page.props.flash?.error ?? null);
 const flashSuccess = computed(() => page.props.flash?.success ?? null);
 
@@ -112,6 +156,15 @@ const displayAmount = computed(() => {
 });
 
 const amountFormatted = computed(() => formatPrice(displayAmount.value, displayCurrency.value));
+
+const hasPaymentSummary = computed(() =>
+    Array.isArray(props.payment_summary) && props.payment_summary.length > 0
+);
+
+function summaryLineAmount(line) {
+    const amount = Number(line?.amount ?? 0);
+    return formatPrice(amount, props.currency);
+}
 
 function setDisplayCurrency(code) {
     if (currencyList.value.some((c) => c.code === code)) {
@@ -334,13 +387,17 @@ function submitPixAuto() {
         return;
     }
     pixAutoForm.cpf = cpfDigits;
-    pixAutoForm.post(payUrl.value, { preserveScroll: true, onError });
+    postFormWithPluginData(pixAutoForm);
 }
 
 onMounted(() => {
     if (showCardForm.value && canPayWithStripe.value) setTimeout(() => initStripeCard(), 100);
     const title = props.app_name ? `${props.app_name}` : 'Pagamento';
     document.title = title;
+    const pluginUi = page.props.plugin_ui;
+    if (pluginUi) {
+        registerPluginCheckoutComponents(pluginUi, props.checkout_payment_methods || []);
+    }
 });
 onBeforeUnmount(() => destroyStripeCard());
 
@@ -383,12 +440,11 @@ async function initMercadopagoBrick() {
                 return new Promise((resolve, reject) => {
                     cardSubmitting.value = true;
                     error.value = '';
-                    router.post(payUrl.value, {
+                    postPay({
                         session_token: props.session_token,
                         payment_method: 'card',
                         payment_token: JSON.stringify(formData),
                     }, {
-                        preserveScroll: true,
                         onError: (err) => {
                             onError(err);
                             reject();
@@ -460,13 +516,12 @@ async function submitCard(ev) {
                 cardSubmitting.value = false;
                 return;
             }
-            router.post(payUrl.value, {
+            postPay({
                 session_token: props.session_token,
                 payment_method: 'card',
                 payment_token: paymentMethod.id,
                 card_mask: paymentMethod.card?.last4 ? `**** ${paymentMethod.card.last4}` : '',
             }, {
-                preserveScroll: true,
                 onError: (err) => {
                     onError(err);
                     cardSubmitting.value = false;
@@ -547,13 +602,12 @@ async function submitCard(ev) {
                 }
             }
             const last4 = numberDigits.slice(-4);
-            router.post(payUrl.value, {
+            postPay({
                 session_token: props.session_token,
                 payment_method: 'card',
                 payment_token: JSON.stringify({ card_token: tokenId, installments: 1 }),
                 card_mask: last4 ? `**** ${last4}` : '',
             }, {
-                preserveScroll: true,
                 onError: (err) => {
                     onError(err);
                     cardSubmitting.value = false;
@@ -603,13 +657,12 @@ async function submitCard(ev) {
                 return;
             }
             const last4 = numberDigits.slice(-4);
-            router.post(payUrl.value, {
+            postPay({
                 session_token: props.session_token,
                 payment_method: 'card',
                 payment_token: paymentToken,
                 card_mask: result?.card_mask || (last4 ? `**** ${last4}` : ''),
             }, {
-                preserveScroll: true,
                 onError: (err) => {
                     onError(err);
                     cardSubmitting.value = false;
@@ -678,14 +731,27 @@ async function submitCard(ev) {
                     <p v-if="exchangeRateText" class="mt-2 text-xs text-zinc-500">{{ exchangeRateText }}</p>
                 </div>
                 <div class="mt-8 space-y-3 border-t border-zinc-700/80 pt-6">
-                    <div class="flex justify-end gap-4 text-sm">
-                        <span class="text-zinc-400">Subtotal</span>
-                        <span class="font-medium text-white min-w-[6rem]">{{ amountFormatted }}</span>
-                    </div>
-                    <div class="flex justify-end gap-4 border-t border-zinc-700/50 pt-4 text-base font-bold">
-                        <span class="text-white">Total devido hoje</span>
-                        <span class="text-white min-w-[6rem]">{{ amountFormatted }}</span>
-                    </div>
+                    <template v-if="hasPaymentSummary">
+                        <div
+                            v-for="(line, idx) in payment_summary"
+                            :key="idx"
+                            class="flex justify-end gap-4 text-sm"
+                            :class="line.highlight ? 'border-t border-zinc-700/50 pt-4 text-base font-bold' : ''"
+                        >
+                            <span :class="line.highlight ? 'text-white' : 'text-zinc-400'">{{ line.label }}</span>
+                            <span :class="line.highlight ? 'text-white' : 'font-medium text-white'" class="min-w-[6rem]">{{ summaryLineAmount(line) }}</span>
+                        </div>
+                    </template>
+                    <template v-else>
+                        <div class="flex justify-end gap-4 text-sm">
+                            <span class="text-zinc-400">Subtotal</span>
+                            <span class="font-medium text-white min-w-[6rem]">{{ amountFormatted }}</span>
+                        </div>
+                        <div class="flex justify-end gap-4 border-t border-zinc-700/50 pt-4 text-base font-bold">
+                            <span class="text-white">Total devido hoje</span>
+                            <span class="text-white min-w-[6rem]">{{ amountFormatted }}</span>
+                        </div>
+                    </template>
                 </div>
                 <div class="mt-8 flex justify-end">
                     <div class="flex items-center gap-2 rounded-lg bg-zinc-800/60 px-4 py-3 text-sm text-zinc-300 max-w-max">
@@ -719,6 +785,23 @@ async function submitCard(ev) {
 
                 <h1 class="text-xl font-bold tracking-tight text-zinc-900">Concluir pagamento</h1>
 
+                <div
+                    v-if="plugin_checkout_extensions?.length"
+                    class="mt-6 space-y-4"
+                    data-checkout="plugin-extensions"
+                >
+                    <template v-for="(ext, idx) in plugin_checkout_extensions" :key="ext.id || idx">
+                        <component
+                            v-if="resolvePluginComponent(ext)"
+                            :is="resolvePluginComponent(ext)"
+                            :format-price="formatPrice"
+                            :display-currency="displayCurrency"
+                            @update:model-value="onPluginCheckoutUpdate(ext.plugin_slug, $event)"
+                        />
+                    </template>
+                </div>
+                <PluginRenderZone zone="checkout.commerce.after_extensions" class="mt-6" />
+
                 <div v-if="customer_email" class="mt-6">
                     <label class="block text-sm font-medium text-zinc-700">E-mail</label>
                     <p class="mt-1 rounded-lg border border-zinc-200 bg-zinc-50/50 px-4 py-3 text-zinc-900">{{ customer_email }}</p>
@@ -745,7 +828,7 @@ async function submitCard(ev) {
                         <template v-else-if="selectedMethod === 'pix'">
                             <div class="rounded-xl border-2 border-zinc-200 bg-zinc-50/30 p-4 space-y-4">
                                 <p class="text-sm text-zinc-600">Clique abaixo para gerar o QR Code PIX. Você será redirecionado para a página de pagamento.</p>
-                                <form @submit.prevent="pixForm.post(payUrl, { preserveScroll: true, onError })">
+                                <form @submit.prevent="postFormWithPluginData(pixForm)">
                                     <div class="flex gap-2">
                                         <button
                                             type="button"
@@ -808,7 +891,7 @@ async function submitCard(ev) {
                         <template v-else-if="selectedMethod === 'boleto'">
                             <div class="rounded-xl border-2 border-zinc-200 bg-zinc-50/30 p-4 space-y-4">
                                 <p class="text-sm text-zinc-600">Clique abaixo para gerar o boleto. Você será redirecionado para a página com o código de barras e o link para download.</p>
-                                <form @submit.prevent="boletoForm.post(payUrl, { preserveScroll: true, onError })">
+                                <form @submit.prevent="postFormWithPluginData(boletoForm)">
                                     <div class="flex gap-2">
                                         <button
                                             type="button"

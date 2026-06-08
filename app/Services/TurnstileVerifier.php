@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\CheckoutTurnstileSettings;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -10,9 +11,7 @@ class TurnstileVerifier
 {
     public function isConfigured(): bool
     {
-        $secret = trim((string) config('checkout_security.captcha.secret_key', ''));
-
-        return $secret !== '';
+        return CheckoutTurnstileSettings::secretKey() !== '';
     }
 
     /**
@@ -33,7 +32,7 @@ class TurnstileVerifier
             $response = Http::asForm()
                 ->timeout(10)
                 ->post('https://challenges.cloudflare.com/turnstile/v0/siteverify', [
-                    'secret' => config('checkout_security.captcha.secret_key'),
+                    'secret' => CheckoutTurnstileSettings::secretKey(),
                     'response' => $token,
                     'remoteip' => $request->ip(),
                 ]);

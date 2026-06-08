@@ -13,6 +13,8 @@ use App\Models\SubscriptionPlan;
 use App\Models\User;
 use App\Plugins\Commerce\PluginCommercePricing;
 use App\Plugins\Commerce\PluginTenantGuard;
+use App\Plugins\PluginCheckoutExtensionRegistry;
+use App\Plugins\PluginHookBus;
 use Illuminate\Support\Str;
 
 class CommerceCheckoutBridge
@@ -88,10 +90,14 @@ class CommerceCheckoutBridge
             ]
         );
 
-        $before = new CheckoutBeforeProcess($anchorProduct, [
+        $cartValidated = [
             'email' => $email,
             'commerce_cart_id' => $cart->id,
-        ], $cart);
+        ];
+        $pluginCheckoutData = PluginCheckoutExtensionRegistry::decodeCheckoutDataFromRequest(request());
+        $before = new CheckoutBeforeProcess($anchorProduct, $cartValidated, $cart, $pluginCheckoutData);
+        PluginCheckoutExtensionRegistry::invokeProcessHandlers($anchorProduct, $cartValidated, $pluginCheckoutData, $before);
+        PluginHookBus::doAction('checkout.before_process', $before, $anchorProduct, $cartValidated, $pluginCheckoutData);
         event($before);
         if ($before->abort !== null && $before->abort !== '') {
             abort(422, $before->abort);

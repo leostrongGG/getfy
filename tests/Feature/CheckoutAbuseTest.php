@@ -4,8 +4,10 @@ namespace Tests\Feature;
 
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\Setting;
 use App\Models\User;
 use App\Services\CheckoutAbuseGuard;
+use App\Support\CheckoutTurnstileSettings;
 use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
@@ -92,6 +94,27 @@ class CheckoutAbuseTest extends TestCase
             ->assertSuccessful();
 
         $this->assertSame('cancelled', Order::query()->first()->status);
+    }
+
+    public function test_panel_turnstile_requires_captcha_for_pix_when_enabled(): void
+    {
+        Setting::set('checkout_turnstile_enabled', '1', null);
+        Setting::set('checkout_turnstile_site_key', 'panel-site-key', null);
+        Setting::set('checkout_turnstile_secret_key', encrypt('panel-secret-key'), null);
+        Setting::set('checkout_turnstile_mode', CheckoutTurnstileSettings::MODE_PIX_BOLETO, null);
+
+        $product = $this->createTestProduct();
+        $guard = app(CheckoutAbuseGuard::class);
+        $request = request()->merge([
+            'payment_method' => 'pix',
+            'email' => 'buyer@example.com',
+        ]);
+
+        $props = $guard->securityPropsForRequest($request, $product);
+
+        $this->assertTrue($props['requires_captcha']);
+        $this->assertSame('panel-site-key', $props['turnstile_site_key']);
+        $this->assertTrue(CheckoutTurnstileSettings::requiresTokenForPaymentMethod('pix'));
     }
 
     public function test_pending_limit_blocks_checkout_when_too_many_recent_pending_orders(): void

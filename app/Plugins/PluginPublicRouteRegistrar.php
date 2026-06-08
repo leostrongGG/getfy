@@ -8,14 +8,6 @@ use Illuminate\Support\Facades\Route;
 
 class PluginPublicRouteRegistrar
 {
-    /** @var list<string> */
-    private const ALLOWED_PUBLIC_MIDDLEWARE = [
-        'web',
-        'storefront.tenant',
-        'throttle:60,1',
-        'throttle:120,1',
-    ];
-
     /**
      * @param  array<string, mixed>  $plugin
      */
@@ -49,7 +41,7 @@ class PluginPublicRouteRegistrar
             if (! empty($decl['middleware']) && is_array($decl['middleware'])) {
                 $middleware = [];
                 foreach ($decl['middleware'] as $mw) {
-                    if (is_string($mw) && in_array($mw, self::ALLOWED_PUBLIC_MIDDLEWARE, true)) {
+                    if (is_string($mw) && PluginMiddlewareRegistry::isAllowedForPublic($mw)) {
                         $middleware[] = $mw;
                     }
                 }

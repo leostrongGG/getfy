@@ -14,8 +14,7 @@
   ],
   "settings_tab": {
     "id": "starter",
-    "label": "Plugin Starter",
-    "component": "Plugin/GetfyPluginStarter/SettingsTab"
+    "label": "Plugin Starter"
   },
   "frontend": {
     "entry": "dist/plugin-ui.js",
@@ -28,5 +27,11 @@
     }
   },
   "routes": "routes.php",
-  "events": {}
+  "events": {},
+  "capabilities": [
+    { "id": "view", "label": "Ver painel do starter" }
+  ],
+  "render_zones": {
+    "produtos.index.after_toolbar": { "export": "DashboardPage", "id": "starter-toolbar" }
+  }
 }

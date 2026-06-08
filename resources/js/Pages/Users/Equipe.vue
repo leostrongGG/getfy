@@ -4,6 +4,7 @@ import { Link, router, useForm, usePage } from '@inertiajs/vue3';
 import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import Button from '@/components/ui/Button.vue';
 import { Users, Shield, UserPlus, Plus, Pencil, Trash2, X, ScrollText, Trash } from 'lucide-vue-next';
+import PluginRenderZone from '@/components/plugins/PluginRenderZone.vue';
 
 defineOptions({ layout: LayoutInfoprodutor });
 
@@ -44,7 +45,7 @@ function isUsersTabActive(href) {
     return page.url === href || page.url.startsWith(href + '/') || page.url.startsWith(href + '?');
 }
 
-const permissionDefs = [
+const corePermissionDefs = [
     { key: 'dashboard.view', label: 'Dashboard' },
     { key: 'vendas.view', label: 'Vendas' },
     { key: 'reembolsos.view', label: 'Reembolsos (ver)' },
@@ -60,6 +61,21 @@ const permissionDefs = [
     { key: 'equipe.manage', label: 'Gerenciar equipe' },
 ];
 
+const pluginCapabilities = computed(() => page.props.plugin_capabilities ?? {});
+
+const permissionDefs = computed(() => {
+    const pluginDefs = Object.entries(pluginCapabilities.value).map(([key, label]) => ({
+        key,
+        label: typeof label === 'string' ? label : key,
+        group: 'plugin',
+    }));
+    if (pluginDefs.length === 0) {
+        return corePermissionDefs;
+    }
+
+    return [...corePermissionDefs, ...pluginDefs];
+});
+
 const showRoleModal = ref(false);
 const editingRole = ref(null);
 
@@ -71,7 +87,7 @@ const roleForm = useForm({
 
 function defaultPermissions() {
     const p = {};
-    for (const def of permissionDefs) {
+    for (const def of permissionDefs.value) {
         p[def.key] = false;
     }
     p['dashboard.view'] = true;
@@ -237,6 +253,7 @@ function confirmClearLogs() {
                 </Button>
             </div>
         </div>
+        <PluginRenderZone zone="equipe.index.after_header" />
 
         <!-- Abas Usuários (principal) + Abas Equipe (secundária) -->
         <div class="flex flex-col gap-3">
@@ -465,10 +482,23 @@ function confirmClearLogs() {
                         <div class="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4">
                             <h3 class="text-sm font-semibold text-zinc-900 dark:text-white">Permissões</h3>
                             <div class="mt-3 space-y-2">
-                                <label v-for="p in permissionDefs" :key="p.key" class="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200">
-                                    <input v-model="roleForm.permissions[p.key]" type="checkbox" class="rounded border-zinc-300 dark:border-zinc-600" />
-                                    <span>{{ p.label }}</span>
-                                </label>
+                                <template v-for="p in permissionDefs.filter((d) => !d.group)" :key="p.key">
+                                    <label class="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200">
+                                        <input v-model="roleForm.permissions[p.key]" type="checkbox" class="rounded border-zinc-300 dark:border-zinc-600" />
+                                        <span>{{ p.label }}</span>
+                                    </label>
+                                </template>
+                                <template v-if="permissionDefs.some((d) => d.group === 'plugin')">
+                                    <p class="pt-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Plugins</p>
+                                    <label
+                                        v-for="p in permissionDefs.filter((d) => d.group === 'plugin')"
+                                        :key="p.key"
+                                        class="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200"
+                                    >
+                                        <input v-model="roleForm.permissions[p.key]" type="checkbox" class="rounded border-zinc-300 dark:border-zinc-600" />
+                                        <span>{{ p.label }}</span>
+                                    </label>
+                                </template>
                             </div>
                         </div>
 

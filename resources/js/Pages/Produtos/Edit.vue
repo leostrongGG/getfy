@@ -11,6 +11,8 @@ import GatewaySelect from '@/components/ui/GatewaySelect.vue';
 import GatewayRedundancySidebar from '@/components/produtos/GatewayRedundancySidebar.vue';
 import ProductCoproducaoTab from '@/components/produtos/ProductCoproducaoTab.vue';
 import ProductAfiliadosTab from '@/components/produtos/ProductAfiliadosTab.vue';
+import PluginSlotHost from '@/components/plugins/PluginSlotHost.vue';
+import PluginRenderZone from '@/components/plugins/PluginRenderZone.vue';
 import {
     LayoutDashboard,
     Settings,
@@ -122,6 +124,7 @@ const props = defineProps({
         default: () => ({ pix: [], card: [], boleto: [], pix_auto: [], apple_pay: [], google_pay: [], crypto: [] }),
     },
     plugin_product_panels: { type: Array, default: () => [] },
+    plugin_form_sections: { type: Array, default: () => [] },
     tenant_currencies: { type: Array, default: () => [] },
 });
 
@@ -1946,6 +1949,17 @@ function submit() {
                     </Link>
                 </div>
             </form>
+            <div v-if="plugin_form_sections?.length" class="mx-auto w-full max-w-3xl xl:max-w-6xl">
+                <PluginSlotHost
+                    layout="stack"
+                    :items="plugin_form_sections"
+                    :context="{ produto, product: produto }"
+                />
+                <PluginRenderZone
+                    zone="produtos.edit.after_form"
+                    :context="{ produto, product: produto }"
+                />
+            </div>
         </template>
 
         <!-- Aba Configurações -->

@@ -2,11 +2,15 @@
 
 namespace App\Http\Controllers\Commerce;
 
+use App\Events\CommerceCheckoutSessionLoading;
 use App\Http\Controllers\Controller;
 use App\Models\CommerceCheckoutSession;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Setting;
+use App\Plugins\Commerce\CommerceCheckoutContextRegistry;
+use App\Plugins\PluginCheckoutExtensionRegistry;
+use App\Plugins\PluginHookBus;
 use App\Services\CheckoutAbuseGuard;
 use App\Services\Commerce\CommerceCheckoutPaymentService;
 use App\Support\CheckoutCardCredentialsPayload;
@@ -36,8 +40,9 @@ class CommerceCheckoutController extends Controller
 
         $tenantId = (int) $session->tenant_id;
         $productModel = $order->product;
+        $gatewayConfig = CommerceCheckoutContextRegistry::resolveGatewayConfig($order);
         $config = is_array($productModel?->checkout_config) ? $productModel->checkout_config : [];
-        $pg = is_array($config['payment_gateways'] ?? null) ? $config['payment_gateways'] : [];
+        $pg = $gatewayConfig ?? (is_array($config['payment_gateways'] ?? null) ? $config['payment_gateways'] : []);
         $checkoutPaymentMethods = CheckoutPaymentMethodsBuilder::build($tenantId, $pg, null);
         $availableMethods = CheckoutPaymentMethodsBuilder::methodIds($checkoutPaymentMethods);
         if ($availableMethods === []) {
@@ -48,17 +53,27 @@ class CommerceCheckoutController extends Controller
         $customer = is_array($session->customer) ? $session->customer : [];
         $lineItems = is_array($session->line_items) ? $session->line_items : [];
 
+        $registryLineItems = CommerceCheckoutContextRegistry::resolveLineItems($order);
+        if ($registryLineItems !== null && $registryLineItems !== []) {
+            $lineItems = $registryLineItems;
+        }
+
         $currenciesRaw = Setting::get('currencies', null, $tenantId);
         $currencies = $currenciesRaw
             ? (is_string($currenciesRaw) ? json_decode($currenciesRaw, true) : $currenciesRaw)
             : config('products.currencies');
         $currencies = is_array($currencies) ? $currencies : config('products.currencies');
 
-        $productName = count($lineItems) > 1
-            ? count($lineItems).' itens'
-            : ($lineItems[0]['name'] ?? $productModel?->name ?? 'Pedido');
+        $productName = CommerceCheckoutContextRegistry::resolveOrderLabel($order);
+        if ($productName === null || $productName === '') {
+            $productName = count($lineItems) > 1
+                ? count($lineItems).' itens'
+                : ($lineItems[0]['name'] ?? $productModel?->name ?? 'Pedido');
+        }
 
-        return Inertia::render('ApiCheckout/Show', [
+        $paymentSummary = CommerceCheckoutContextRegistry::resolvePaymentSummary($order, $session) ?? [];
+
+        $payload = new \ArrayObject([
             'session_token' => $token,
             'commerce_checkout' => true,
             'commerce_line_items' => $lineItems,
@@ -91,7 +106,19 @@ class CommerceCheckoutController extends Controller
             'card_pagarme_api_base_url' => $cardCredentials['card_pagarme_api_base_url'],
             'card_gateway_keys' => $cardCredentials['card_gateway_keys'],
             'checkout_security' => app(CheckoutAbuseGuard::class)->securityPropsForRequest($request, $productModel),
+            'payment_summary' => $paymentSummary,
+            'checkout_extra' => [],
+            'plugin_checkout_extensions' => PluginCheckoutExtensionRegistry::activeForOrder($order, 'commerce'),
         ]);
+
+        event(new CommerceCheckoutSessionLoading($session, $order, $payload));
+
+        $renderPayload = $payload->getArrayCopy();
+        if ($productModel) {
+            $renderPayload = PluginHookBus::applyFilters('checkout.payload', $renderPayload, $productModel, $request);
+        }
+
+        return Inertia::render('ApiCheckout/Show', $renderPayload);
     }
 
     public function process(Request $request): RedirectResponse
@@ -99,6 +126,7 @@ class CommerceCheckoutController extends Controller
         $rules = [
             'session_token' => ['required', 'string', 'max:64'],
             'payment_method' => ['required', 'string', 'in:pix,pix_auto,boleto,card'],
+            'plugin_checkout_data' => ['nullable', 'string', 'max:65535'],
         ];
         if ($request->input('payment_method') === 'card') {
             $rules['payment_token'] = ['required', 'string', 'max:10000'];

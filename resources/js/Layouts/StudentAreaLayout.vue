@@ -44,19 +44,19 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick));
                     <img :src="logoDark" :alt="appName" class="hidden h-8 max-w-[160px] object-contain object-left dark:block" />
                 </Link>
 
-                <div class="flex items-center gap-2">
-                    <ThemeToggler />
+                <div class="flex items-center gap-1.5 sm:gap-2">
+                    <ThemeToggler compact />
 
                     <div v-if="user" ref="accountMenuRef" class="relative">
                         <button
                             type="button"
-                            class="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white py-1 pl-1 pr-2 text-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+                            class="flex items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-1.5 text-sm transition hover:bg-zinc-100 dark:hover:bg-zinc-800/80"
                             :aria-expanded="accountMenuOpen"
                             @click.stop="accountMenuOpen = !accountMenuOpen"
                         >
                             <span
                                 v-if="!user.avatar_url"
-                                class="flex h-8 w-8 items-center justify-center rounded-md text-xs font-semibold text-white"
+                                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white ring-2 ring-white dark:ring-zinc-900"
                                 :style="{ backgroundColor: primary }"
                             >
                                 {{ initials }}
@@ -65,9 +65,9 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick));
                                 v-else
                                 :src="user.avatar_url"
                                 :alt="user.name"
-                                class="h-8 w-8 rounded-md object-cover"
+                                class="h-8 w-8 shrink-0 rounded-full object-cover ring-2 ring-white dark:ring-zinc-900"
                             />
-                            <ChevronDown class="h-4 w-4 text-zinc-500 transition" :class="{ 'rotate-180': accountMenuOpen }" />
+                            <ChevronDown class="hidden h-3.5 w-3.5 text-zinc-400 transition sm:block" :class="{ 'rotate-180': accountMenuOpen }" />
                         </button>
 
                         <div

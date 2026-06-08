@@ -6,7 +6,12 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
     plugins: [
         laravel({
-            input: ['resources/css/app.css', 'resources/js/app.js', 'resources/js/member-builder.js'],
+            input: [
+                'resources/css/app.css',
+                'resources/js/app.js',
+                'resources/js/member-builder.js',
+                'resources/js/plugins/getfyPluginVueBridge.js',
+            ],
             refresh: true,
         }),
         vue({
@@ -25,6 +30,8 @@ export default defineConfig({
     resolve: {
         alias: {
             '@': '/resources/js',
+            '@getfy/plugin-sdk': '/resources/js/plugin-sdk',
+            'vue-runtime-internal': 'vue',
         },
     },
     optimizeDeps: {
@@ -33,6 +40,21 @@ export default defineConfig({
     server: {
         watch: {
             ignored: ['**/storage/framework/views/**'],
+        },
+    },
+    build: {
+        rollupOptions: {
+            external: (id, parentId) => {
+                if (id !== 'vue') {
+                    return false;
+                }
+
+                return !parentId?.includes('getfyPluginVueBridge');
+            },
+            output: {
+                entryFileNames: (chunk) =>
+                    chunk.name === 'getfyPluginVueBridge' ? 'getfy-plugin-vue.mjs' : 'assets/[name]-[hash].js',
+            },
         },
     },
 });

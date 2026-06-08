@@ -380,21 +380,7 @@ class PluginExtensionRegistry
      */
     public static function getProductFormSections(): array
     {
-        $items = [];
-        foreach (PluginRegistry::enabled() as $plugin) {
-            $sections = $plugin['product_form_sections'] ?? null;
-            if (! is_array($sections)) {
-                continue;
-            }
-            foreach ($sections as $section) {
-                if (! is_array($section)) {
-                    continue;
-                }
-                $items[] = array_merge($section, ['plugin_slug' => $plugin['slug']]);
-            }
-        }
-
-        return $items;
+        return self::collectSlotItemsWithUi('product_form_sections', 'product_form');
     }
 
     /**
@@ -408,11 +394,25 @@ class PluginExtensionRegistry
             if (! is_array($widgets)) {
                 continue;
             }
+            $exports = is_array($plugin['frontend']['exports'] ?? null) ? $plugin['frontend']['exports'] : [];
             foreach ($widgets as $widget) {
                 if (! is_array($widget)) {
                     continue;
                 }
-                $items[] = array_merge($widget, ['plugin_slug' => $plugin['slug']]);
+                $row = array_merge($widget, ['plugin_slug' => $plugin['slug']]);
+                $exportName = null;
+                if (! empty($widget['ui_export']) && is_string($widget['ui_export'])) {
+                    $exportName = $widget['ui_export'];
+                } elseif (! empty($widget['id']) && is_string($exports['dashboard'] ?? null)) {
+                    $exportName = $exports['dashboard'];
+                } elseif (! empty($widget['id']) && is_array($exports['dashboard'] ?? null)) {
+                    $exportName = $exports['dashboard'][$widget['id']] ?? null;
+                }
+                if (is_string($exportName) && $exportName !== '' && self::hasRuntimeFrontend($plugin)) {
+                    $row['ui_mode'] = 'runtime';
+                    $row['ui_export'] = $exportName;
+                }
+                $items[] = $row;
             }
         }
 
@@ -458,7 +458,7 @@ class PluginExtensionRegistry
      */
     public static function getOrderFulfillmentProviders(): array
     {
-        return self::collectSlotItems('order_fulfillment_providers');
+        return self::collectSlotItemsWithUi('order_fulfillment_providers', 'fulfillment');
     }
 
     /**
@@ -551,22 +551,62 @@ class PluginExtensionRegistry
     public static function getNormalizedProductCardActions(): array
     {
         $items = [];
-        foreach (self::getProductCardActions() as $action) {
+        foreach (self::collectSlotItemsWithUi('product_card_actions', 'product_card') as $action) {
             $slug = (string) ($action['plugin_slug'] ?? '');
-            $plugin = collect(PluginRegistry::enabled())->firstWhere('slug', $slug);
             $row = $action;
             if (! empty($action['route']) && empty($action['href'])) {
                 $route = (string) $action['route'];
                 $row['href'] = str_starts_with($route, '/') ? $route : '/'.$slug.'/'.ltrim($route, '/');
             }
-            if ($plugin && ! empty($action['ui_export']) && self::hasRuntimeFrontend($plugin)) {
-                $row['ui_mode'] = 'runtime';
-                $row['plugin_slug'] = $slug;
-            }
             $items[] = $row;
         }
 
         return $items;
+    }
+
+    /**
+     * @return array<string, array<int, array<string, mixed>>>
+     */
+    public static function getAllRenderZones(): array
+    {
+        $byZone = [];
+        foreach (PluginRegistry::enabled() as $plugin) {
+            $zones = $plugin['render_zones'] ?? null;
+            if (! is_array($zones)) {
+                continue;
+            }
+            $slug = (string) ($plugin['slug'] ?? '');
+            if ($slug === '' || ! self::hasRuntimeFrontend($plugin)) {
+                continue;
+            }
+            foreach ($zones as $zoneId => $decl) {
+                if (! is_string($zoneId) || trim($zoneId) === '' || ! is_array($decl)) {
+                    continue;
+                }
+                $export = trim((string) ($decl['export'] ?? ''));
+                if ($export === '') {
+                    continue;
+                }
+                $byZone[$zoneId][] = array_merge($decl, [
+                    'id' => (string) ($decl['id'] ?? $zoneId.'-'.$slug),
+                    'plugin_slug' => $slug,
+                    'ui_mode' => 'runtime',
+                    'ui_export' => $export,
+                ]);
+            }
+        }
+
+        return PluginHookBus::applyFilters('plugin.render_zones', $byZone);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public static function getRenderZoneItems(string $zoneId): array
+    {
+        $zones = self::getAllRenderZones();
+
+        return $zones[$zoneId] ?? [];
     }
 
     public static function resetForTesting(): void

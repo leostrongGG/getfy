@@ -77,6 +77,7 @@ const props = defineProps({
     /** Definido no servidor quando a URL traz `?preview=1` (preview no iframe do Builder). */
     checkout_builder_preview: { type: Boolean, default: false },
     checkout_security: { type: Object, default: () => ({ requires_captcha: false, turnstile_site_key: null }) },
+    plugin_checkout_extensions: { type: Array, default: () => [] },
 });
 
 const previewConfig = ref(null);
@@ -863,6 +864,7 @@ const hasCustomBodyEnd = computed(() => String(customBodyEndHtml.value).trim() !
                             :currency-list="currencyList"
                             :featured-currencies="featuredCurrencies"
                             :other-currencies="otherCurrencies"
+                            :plugin-checkout-extensions="plugin_checkout_extensions"
                             :price-in-currency="priceInCurrency"
                             @coupon-applied="onCouponApplied"
                             @coupon-cleared="onCouponCleared"

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import { useForm, router } from '@inertiajs/vue3';
+import { useForm, router, usePage } from '@inertiajs/vue3';
+import { usePluginComponentResolver } from '@/composables/usePluginComponentResolver';
 import axios from 'axios';
 import { logTrackingApiError } from '@/lib/checkoutTrackingDebug';
 import { User, UserRound, Mail, ShoppingBag, Loader2, CreditCard, Tag, Check, Pencil, ScanQrCode, Shield, X, AlertCircle, FileText, MapPin } from 'lucide-vue-next';
@@ -21,6 +22,7 @@ import {
 } from '@/composables/usePagarmeTokenizecard.js';
 import { isIosDevice } from '@/utils/isIosDevice.js';
 import { localizePaymentMethods, paymentMethodLabel } from '@/lib/checkoutPaymentMethodLabels';
+import PluginRenderZone from '@/components/plugins/PluginRenderZone.vue';
 
 const STORAGE_KEY = 'checkout_draft';
 
@@ -314,9 +316,38 @@ const props = defineProps({
     featuredCurrencies: { type: Array, default: () => [] },
     otherCurrencies: { type: Array, default: () => [] },
     priceInCurrency: { type: Function, default: (v) => v },
+    pluginCheckoutExtensions: { type: Array, default: () => [] },
 });
 
-const emit = defineEmits(['coupon-applied', 'coupon-cleared', 'update:orderBumpIds', 'payment-approved', 'set-currency']);
+const emit = defineEmits(['coupon-applied', 'coupon-cleared', 'update:orderBumpIds', 'payment-approved', 'set-currency', 'plugin-shipping-change']);
+
+const page = usePage();
+const pluginPagesGlob = import.meta.glob('@/PluginPages/**/*.vue');
+const { resolve: resolvePluginComponent } = usePluginComponentResolver(
+    computed(() => page.props.plugin_ui),
+    pluginPagesGlob,
+);
+const pluginCheckoutData = ref({});
+const pluginShippingAmount = ref(0);
+
+function onPluginCheckoutUpdate(slug, data) {
+    pluginCheckoutData.value = {
+        ...pluginCheckoutData.value,
+        [slug]: data,
+    };
+    const shipping = Number(data?.shipping_amount ?? 0);
+    if (!Number.isNaN(shipping)) {
+        pluginShippingAmount.value = shipping;
+        emit('plugin-shipping-change', shipping);
+    }
+}
+
+function appendPluginCheckoutData(payload) {
+    if (pluginCheckoutData.value && Object.keys(pluginCheckoutData.value).length > 0) {
+        payload.plugin_checkout_data = JSON.stringify(pluginCheckoutData.value);
+    }
+    return payload;
+}
 
 const customerFields = computed(() => props.config?.customer_fields ?? { name: true, cpf: true, phone: true, coupon: false });
 const showName = computed(() => customerFields.value.name !== false);
@@ -1291,6 +1322,7 @@ function buildCajuPaySessionPayload() {
     }
     appendUtms(payload);
     appendCheckoutSecurity(payload);
+    appendPluginCheckoutData(payload);
     return payload;
 }
 
@@ -1731,6 +1763,7 @@ function submitCardWithMercadopagoFormData(formData) {
     appendBillingCountry(payload);
     appendUtms(payload);
     appendCheckoutSecurity(payload);
+    appendPluginCheckoutData(payload);
     return axios.post('/checkout', payload, {
         headers: {
             'Accept': 'application/json',
@@ -2292,6 +2325,7 @@ function submit() {
             appendBillingCountry(payload);
             appendUtms(payload);
             appendCheckoutSecurity(payload);
+            appendPluginCheckoutData(payload);
             axios.post('/checkout', payload, {
                 headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-XSRF-TOKEN': getCsrfToken() },
                 withCredentials: true,
@@ -2424,6 +2458,7 @@ function submit() {
                 appendBillingCountry(payload);
                 appendUtms(payload);
                 appendCheckoutSecurity(payload);
+                appendPluginCheckoutData(payload);
                 return axios.post('/checkout', payload, {
                     headers: {
                         'Accept': 'application/json',
@@ -2600,6 +2635,7 @@ function submit() {
     appendBillingCountry(payload);
     appendUtms(payload);
     appendCheckoutSecurity(payload);
+    appendPluginCheckoutData(payload);
     if (paymentMethod === 'pix' || paymentMethod === 'pix_auto' || paymentMethod === 'boleto') {
         payload.idempotency_key = getCheckoutIdempotencyKey();
     }
@@ -2935,6 +2971,24 @@ function submit() {
                 class="mt-8"
                 @update:selected-ids="emit('update:orderBumpIds', $event)"
             />
+
+            <div
+                v-if="pluginCheckoutExtensions?.length"
+                class="mt-8 space-y-4"
+                data-checkout="plugin-extensions"
+            >
+                <template v-for="(ext, idx) in pluginCheckoutExtensions" :key="ext.id || idx">
+                    <component
+                        v-if="resolvePluginComponent(ext)"
+                        :is="resolvePluginComponent(ext)"
+                        :product-id="productId"
+                        :format-price="formatPrice"
+                        :display-currency="displayCurrency"
+                        @update:model-value="onPluginCheckoutUpdate(ext.plugin_slug, $event)"
+                    />
+                </template>
+            </div>
+            <PluginRenderZone zone="checkout.standard.after_extensions" />
 
             <!-- Forma de pagamento (componentes por gateway em gateways/<slug>/) -->
             <CheckoutPaymentMethods

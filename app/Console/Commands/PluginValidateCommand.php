@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Plugins\PluginClassAutoloader;
 use App\Plugins\PluginExtensionRegistry;
 use App\Plugins\PluginRegistry;
 use Illuminate\Console\Command;
@@ -23,6 +24,11 @@ class PluginValidateCommand extends Command
         }
 
         $errors = PluginRegistry::validatePluginPackage($dir);
+        $srcPath = $dir.DIRECTORY_SEPARATOR.'src';
+        if (is_dir($srcPath)) {
+            $expectedNs = 'Plugins\\'.PluginClassAutoloader::slugToPascalCase($slug).'\\';
+            $this->line("  autoload: namespace esperado {$expectedNs} → src/");
+        }
         if ($errors === []) {
             $this->info("Plugin \"{$slug}\" válido.");
             if (PluginExtensionRegistry::hasRuntimeFrontend(['path' => $dir, 'slug' => $slug, 'frontend' => PluginRegistry::readManifest($dir)['frontend'] ?? null])) {

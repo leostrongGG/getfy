@@ -19,69 +19,18 @@ class PendingPixCheckoutResolver
 
     public static function findReusable(Request $request): ?Order
     {
-        if (! static::isPixLikePaymentMethod($request->input('payment_method'))) {
-            return null;
-        }
-
-        $email = static::normalizeEmail($request->input('email'));
-        $productId = trim((string) $request->input('product_id', ''));
-        if ($email === '' || $productId === '') {
-            return null;
-        }
-
-        if (! Product::query()->where('id', $productId)->where('is_active', true)->exists()) {
-            return null;
-        }
-
-        $since = now()->subSeconds(PixCheckoutDisplay::EXPIRY_SECONDS);
-
-        $candidates = Order::query()
-            ->with('product')
-            ->where('status', 'pending')
-            ->where('email', $email)
-            ->where('product_id', $productId)
-            ->whereNotNull('gateway_id')
-            ->where('created_at', '>=', $since)
-            ->orderByDesc('id')
-            ->limit(5)
-            ->get();
-
-        $offerId = $request->filled('product_offer_id') ? (int) $request->input('product_offer_id') : null;
-        $planId = $request->filled('subscription_plan_id') ? (int) $request->input('subscription_plan_id') : null;
-
-        foreach ($candidates as $order) {
-            if ($offerId !== null && (int) ($order->product_offer_id ?? 0) !== $offerId) {
-                continue;
-            }
-            if ($planId !== null && (int) ($order->subscription_plan_id ?? 0) !== $planId) {
-                continue;
-            }
-            if ($offerId === null && $order->product_offer_id !== null) {
-                continue;
-            }
-            if ($planId === null && $order->subscription_plan_id !== null) {
-                continue;
-            }
-
-            $meta = is_array($order->metadata) ? $order->metadata : [];
-            $method = $meta['checkout_payment_method'] ?? null;
-            if (! in_array($method, ['pix', 'pix_auto'], true)) {
-                continue;
-            }
-            if (! PixCheckoutDisplay::isPixMetadataValid($meta)) {
-                continue;
-            }
-
-            return $order;
-        }
-
-        return null;
+        return static::findReusableOrder($request, strictMetadata: true);
     }
 
-    public static function redirectToPixPage(Order $order, Request $request): RedirectResponse|JsonResponse
+    public static function findReusableRelaxed(Request $request): ?Order
+    {
+        return static::findReusableOrder($request, strictMetadata: false);
+    }
+
+    public static function redirectToPixPage(Order $order, Request $request, bool $relaxed = false): RedirectResponse|JsonResponse
     {
         $order->loadMissing('product');
-        $pixData = PixCheckoutDisplay::pixDataFromOrder($order);
+        $pixData = PixCheckoutDisplay::pixDataFromOrder($order, $relaxed);
         if ($pixData === null) {
             if ($request->expectsJson()) {
                 return response()->json(['message' => 'Código PIX expirado. Gere um novo PIX.'], 410);
@@ -122,6 +71,77 @@ class PendingPixCheckoutResolver
         }
 
         return redirect()->to($url);
+    }
+
+    private static function findReusableOrder(Request $request, bool $strictMetadata): ?Order
+    {
+        if (! static::isPixLikePaymentMethod($request->input('payment_method'))) {
+            return null;
+        }
+
+        $email = static::normalizeEmail($request->input('email'));
+        $productId = trim((string) $request->input('product_id', ''));
+        if ($email === '' || $productId === '') {
+            return null;
+        }
+
+        if (! Product::query()->where('id', $productId)->where('is_active', true)->exists()) {
+            return null;
+        }
+
+        if ($strictMetadata) {
+            $since = now()->subSeconds(PixCheckoutDisplay::EXPIRY_SECONDS);
+        } else {
+            $lookbackMinutes = max(1, (int) config('checkout_security.flood.reuse_lookback_minutes', 120));
+            $since = now()->subMinutes($lookbackMinutes);
+        }
+
+        $candidates = Order::query()
+            ->with('product')
+            ->where('status', 'pending')
+            ->where('email', $email)
+            ->where('product_id', $productId)
+            ->whereNotNull('gateway_id')
+            ->where('created_at', '>=', $since)
+            ->orderByDesc('id')
+            ->limit(5)
+            ->get();
+
+        $offerId = $request->filled('product_offer_id') ? (int) $request->input('product_offer_id') : null;
+        $planId = $request->filled('subscription_plan_id') ? (int) $request->input('subscription_plan_id') : null;
+
+        foreach ($candidates as $order) {
+            if ($offerId !== null && (int) ($order->product_offer_id ?? 0) !== $offerId) {
+                continue;
+            }
+            if ($planId !== null && (int) ($order->subscription_plan_id ?? 0) !== $planId) {
+                continue;
+            }
+            if ($offerId === null && $order->product_offer_id !== null) {
+                continue;
+            }
+            if ($planId === null && $order->subscription_plan_id !== null) {
+                continue;
+            }
+
+            $meta = is_array($order->metadata) ? $order->metadata : [];
+            $method = $meta['checkout_payment_method'] ?? null;
+            if (! in_array($method, ['pix', 'pix_auto'], true)) {
+                continue;
+            }
+
+            if ($strictMetadata) {
+                if (! PixCheckoutDisplay::isPixMetadataValid($meta)) {
+                    continue;
+                }
+            } elseif (! PixCheckoutDisplay::hasPixPayload($meta)) {
+                continue;
+            }
+
+            return $order;
+        }
+
+        return null;
     }
 
     private static function normalizeEmail(mixed $email): string

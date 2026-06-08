@@ -70,6 +70,32 @@
     </script>
     <?php endif; ?>
     <?php if (!isset($__inertiaSsrDispatched)) { $__inertiaSsrDispatched = true; $__inertiaSsrResponse = app(\Inertia\Ssr\Gateway::class)->dispatch($page); }  if ($__inertiaSsrResponse) { echo $__inertiaSsrResponse->head; } ?>
+    <?php
+        $viteDevHot = public_path('hot');
+        $vueBridgeBuilt = public_path('build/getfy-plugin-vue.mjs');
+        $vueBridgeImport = (! file_exists($viteDevHot) && file_exists($vueBridgeBuilt))
+            ? asset('build/getfy-plugin-vue.mjs')
+            : \Illuminate\Support\Facades\Vite::asset('resources/js/plugins/getfyPluginVueBridge.js');
+    ?>
+    <script type="importmap">
+        {"imports":{"vue":<?php echo json_encode($vueBridgeImport, 15, 512) ?>}}
+    </script>
+    <?php
+        $assetContext = \App\Plugins\PluginAssetQueue::contextForRequest(request());
+        \App\Plugins\PluginAssetQueue::fireHeadHooks($assetContext);
+        $themeTokensHead = \App\Plugins\ThemeEngine::tokensForRequest(request());
+        $pluginContextStyles = \App\Plugins\PluginAssetQueue::stylesFor($assetContext);
+        $pluginContextScripts = \App\Plugins\PluginAssetQueue::scriptsFor($assetContext);
+    ?>
+    <?php if(!empty($themeTokensHead)): ?>
+    <style>:root { <?php $__currentLoopData = $themeTokensHead; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $cssVar => $cssValue): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?> <?php echo e($cssVar); ?>: <?php echo e($cssValue); ?>; <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?> }</style>
+    <?php endif; ?>
+    <?php $__currentLoopData = $pluginContextStyles; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $asset): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?>
+    <link rel="stylesheet" href="<?php echo e($asset['url']); ?>" data-plugin-style="<?php echo e($asset['handle']); ?>">
+    <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?>
+    <?php $__currentLoopData = $pluginContextScripts; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $asset): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?>
+    <script src="<?php echo e($asset['url']); ?>" <?php if(!empty($asset['defer'])): ?> defer <?php endif; ?> data-plugin-script="<?php echo e($asset['handle']); ?>"></script>
+    <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?>
     <?php echo app('Illuminate\Foundation\Vite')(['resources/css/app.css', 'resources/js/app.js']); ?>
 </head>
 <body class="antialiased">

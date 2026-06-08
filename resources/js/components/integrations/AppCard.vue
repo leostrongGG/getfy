@@ -26,7 +26,12 @@ const imageUrl = computed(() => {
         @click="emit('click')"
     >
         <div
-            class="flex h-24 shrink-0 items-center justify-center overflow-hidden rounded-t-2xl border-b border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/80"
+            class="flex shrink-0 items-center justify-center overflow-hidden rounded-t-2xl border-b border-zinc-200 dark:border-zinc-700"
+            :class="
+                app.imageCover
+                    ? 'h-32 bg-white p-3 dark:bg-white'
+                    : 'h-24 bg-zinc-50 p-3 dark:bg-zinc-800/80'
+            "
         >
             <div
                 v-if="imageUrl"
@@ -35,7 +40,8 @@ const imageUrl = computed(() => {
                 <img
                     :src="imageUrl"
                     :alt="app.name"
-                    class="max-h-full max-w-full rounded-2xl object-contain"
+                    class="max-h-full max-w-full object-contain"
+                    :class="app.imageCover ? '' : 'rounded-2xl'"
                     @error="($e) => ($e.target.style.display = 'none')"
                 />
             </div>

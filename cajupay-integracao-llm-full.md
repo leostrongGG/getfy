@@ -1,5 +1,5 @@
 # CajuPay — Documentação completa para LLMs
-> Gerado em 2026-06-02T12:18:59.357Z. Não edite à mão — rode `npm run build:llm-docs` no frontend.
+> Gerado em 2026-06-07T03:29:21.333Z. Não edite à mão — rode `npm run build:llm-docs` no frontend.
 > Pacote modular: https://cajupay.com.br/docs/llm/
 ---
 
@@ -44,6 +44,7 @@ Sempre. Cole no início do contexto da IA junto com os módulos específicos do 
 |----------------------|-------------------------|
 | **Só receber PIX** | 02, 03, 10, 12, **21**, 16 |
 | **Checkout embed cartão** | 01, 02, 03, 04, 05, 06, 11, 15, 16 |
+| **Plataforma ERP/SaaS (auto webhook)** | 02, 11, **22**, 16 |
 | **+ Apple Pay + Google Pay** | Acima + 07, 08, 09, 17 |
 | **Split de comissão** | 13 |
 | **Saques / carteira** | 14 |
@@ -144,7 +145,7 @@ sequenceDiagram
 | Draft em cache + `polling_token` | Backend do parceiro | **Não existe** na CajuPay |
 | `POST /checkout/cajupay/confirm-order` | Backend do parceiro | Pedido interno `pending` + `gateway_id` |
 | `GET /checkout/order-status` | Backend do parceiro | Opcional: `GET /api/sdk/v1/checkout/sessions/{id}` |
-| `POST /webhooks/gateways/cajupay` | Backend do parceiro | Cadastro: `POST /api/webhooks/endpoints` |
+| `POST /webhooks/gateways/cajupay` | Backend do parceiro | Cadastro: `POST /api/webhooks/endpoints` ou idempotente `POST /api/webhooks/endpoints/register` (plataformas) |
 | PIX no checkout | Backend do parceiro | `POST /api/payments/pix` |
 
 **Nunca** documente `/checkout/cajupay/*` como endpoints da CajuPay — são convenções do sistema do parceiro.
@@ -153,6 +154,7 @@ sequenceDiagram
 
 - Dados de cartão **não** trafegam pelo servidor do integrador.
 - O backend do parceiro só: cria sessão, persiste pedido, valida webhooks.
+- **Plataformas (ERP/SaaS):** ao salvar credenciais do lojista, chamar `POST /api/webhooks/endpoints/register` — módulo **22**.
 - Coleta de cartão: iframe do SDK (formulário embed) → `POST /api/sdk/public/.../confirm`.
 
 ## Multi-moeda (Caju Global)
@@ -309,6 +311,8 @@ async function cajupayFetch(path, { method = "GET", body, idempotencyKey } = {})
 - [ ] Par public/secret em variáveis de ambiente
 - [ ] Escopos mínimos necessários
 - [ ] Secret nunca no bundle do browser
+- [ ] **Plataformas:** também `CAJUPAY_WEBHOOK_SECRET` (`cwhsec_`) — ver módulo **22**
+- [ ] Três env vars se integração completa: `CAJUPAY_API_KEY`, `CAJUPAY_API_SECRET`, `CAJUPAY_WEBHOOK_SECRET`
 
 ---
 
@@ -322,6 +326,7 @@ async function cajupayFetch(path, { method = "GET", body, idempotencyKey } = {})
 1. Envie `Idempotency-Key` em toda criação crítica (PIX, saque, `confirm` SDK).
 2. Trate o body de erro como `{ "error": "<codigo>" }` (JSON).
 3. Cartão/wallets: página do checkout em **HTTPS** em produção.
+4. Envie `partner_checkout_url` ao criar cobranças/sessões via API (opcional no contrato, **recomendado em produção** para compliance).
 
 ## Quando usar este módulo
 
@@ -370,6 +375,7 @@ X-CajuPay-Checkout-Host: checkout.sualoja.com.br
 | HTTP | `error` (exemplos) | Significado |
 |------|-------------------|-------------|
 | 400 | `invalid_amount`, `missing_idempotency_key` | Body inválido |
+| 400 | `invalid_partner_checkout_url`, `https_required` | URL de checkout do parceiro inválida |
 | 400 | `method_not_available`, `payer_email_required` | Sessão/método/pagador |
 | 401 | — | Credenciais inválidas |
 | 403 | `forbidden` | Escopo ou KYC (saques) |
@@ -385,6 +391,7 @@ Com Redis habilitado: limite por API Key ou IP. Webhook inbound PSP (`POST /webh
 
 - [ ] `Idempotency-Key` em PIX, payouts e confirms
 - [ ] HTTPS no checkout embed (produção)
+- [ ] `partner_checkout_url` em PIX, sessões SDK e links via API (recomendado)
 - [ ] Tratamento de `error` no JSON de resposta
 
 ---
@@ -550,9 +557,12 @@ Exemplo de body (servidor):
   "allow_card": true,
   "allow_apple_pay": true,
   "allow_google_pay": true,
-  "locale": "pt-BR"
+  "locale": "pt-BR",
+  "partner_checkout_url": "https://loja.com/checkout/pedido-1"
 }
 ```
+
+`partner_checkout_url` (opcional na API, **recomendado em produção**): URL HTTPS da página de checkout no site do parceiro onde o comprador iniciou o pagamento — usado para compliance e auditoria antifraude.
 
 ## Idioma (`locale`)
 
@@ -1271,6 +1281,7 @@ Idempotency-Key: pedido-123-pix
   "description": "Pedido #123",
   "product_ref": "produto-x",
   "customer_ref": "cliente-externo-456",
+  "partner_checkout_url": "https://loja.com/checkout/pedido-123",
   "split_id": "550e8400-e29b-41d4-a716-446655440000",
   "consumer": {
     "name": "Cliente",
@@ -1302,12 +1313,12 @@ Resposta (200):
 2. POST seu-backend/checkout → seu serviço chama POST /api/payments/pix
 3. Exibir QR / copia e cola (pix_copy_paste, pix_qr_code)
 4. order.gateway_id = payment_id (UUID CajuPay)
-5. Webhook `pix.payment.*` (módulo 12) **+** reconciliação em background (módulo 21)
+5. Webhook `pix.payment.paid` (módulo 12) **+** reconciliação em background (módulo 21)
 6. Ao paid → liberar produto (idempotente)
 
-## Reconciliação em background (obrigatório)
+## Reconciliação em background (obrigatório como fallback)
 
-O webhook outbound é enviado **uma vez** e pode falhar. Polling **só na tela do QR** não cobre o caso em que o comprador paga e fecha a aba.
+A CajuPay envia webhook **`pix.payment.paid`** quando o PIX é confirmado. Mesmo assim, implemente job de reconciliação — entrega pode falhar ou o handler pode estar indisponível. Polling **só na tela do QR** não cobre o caso em que o comprador paga e fecha a aba.
 
 Implemente um **job no servidor** (cron/worker) que consulta `GET /api/payments` a cada **60–120 s** por **6–12 h**, localiza o `payment_id` salvo no pedido e, se `status === "paid"`, executa o **mesmo pipeline** do webhook.
 
@@ -1355,15 +1366,15 @@ Recebimento PIX **não** exige KYC aprovado. Saques sim (módulo 14).
 |-------------|------------|
 | Devolver PIX ao comprador | [18-pix-refund-api.md](18-pix-refund-api.md) |
 | Disputas MED (consulta + defesa) | [19-med-pix-api.md](19-med-pix-api.md) |
-| Webhooks `pix.payment.refunded` / `med_*` | [12-webhooks-pix-med.md](12-webhooks-pix-med.md) |
+| Webhooks `pix.payment.paid`, `pix.payment.refunded`, `med_*` | [12-webhooks-pix-med.md](12-webhooks-pix-med.md) |
 
 ## Checklist
 
 - [ ] PIX criado no servidor com API Keys
 - [ ] `Idempotency-Key` por pedido
 - [ ] `payment_id` salvo no pedido interno
-- [ ] Webhook `pix.payment.*` (módulo 12)
-- [ ] Job de reconciliação em background — `GET /api/payments` (módulo 21)
+- [ ] `partner_checkout_url` na criação (recomendado — compliance)
+- [ ] Webhook `pix.payment.paid` (módulo 12) + fallback reconciliação (módulo 21)
 - [ ] Se houver reembolso/MED: módulos 18, 19 e eventos webhook PIX
 
 ---
@@ -1375,7 +1386,7 @@ Recebimento PIX **não** exige KYC aprovado. Saques sim (módulo 14).
 
 ## INSTRUÇÕES PARA O MODELO
 
-1. Cadastre endpoint HTTPS no painel `/webhooks` ou `POST /api/webhooks/endpoints`.
+1. Cadastre endpoint HTTPS no painel `/api?tab=webhooks` ou `POST /api/webhooks/endpoints` (manual) / `POST /api/webhooks/endpoints/register` (plataformas — módulo **22**).
 2. Valide **HMAC** em todo POST recebido — rejeite sem assinatura válida.
 3. Guarde `signing_secret` (`cwhsec_...`) **uma vez** na criação — não vem de novo na listagem.
 4. Worker `integrator-webhook-worker` + RabbitMQ devem estar rodando — senão CRUD não entrega eventos.
@@ -1387,9 +1398,9 @@ Confirmação de pagamento cartão, Apple Pay ou Google Pay no checkout SDK ou l
 
 ## Cadastro (painel ou API)
 
-**Painel:** https://cajupay.com.br/webhooks — URL, eventos, copiar `signing_secret`.
+**Painel:** https://cajupay.com.br/api?tab=webhooks — URL, eventos, copiar `signing_secret`.
 
-**API:**
+**API (manual — sempre cria novo endpoint):**
 
 ```http
 POST https://api.cajupay.com.br/api/webhooks/endpoints
@@ -1404,12 +1415,12 @@ Content-Type: application/json
     "checkout.payment.paid",
     "checkout.payment.failed",
     "checkout.payment.refunded",
-    "checkout.payment.disputed",
-    "card.payment.succeeded",
-    "card.payment.failed"
+    "checkout.payment.disputed"
   ]
 }
 ```
+
+**API (plataformas — idempotente):** `POST /api/webhooks/endpoints/register` — ver módulo **22**.
 
 Resposta inclui `signing_secret` **apenas nesta resposta**.
 
@@ -1420,9 +1431,7 @@ Omitir `event_types` ou `[]` = todos os tipos documentados. Wildcard: `checkout.
 | `type` / `X-CajuPay-Event` | Ação no host |
 |----------------------------|--------------|
 | `checkout.payment.paid` | Marcar pedido pago / liberar acesso |
-| `card.payment.succeeded` | Idem (alias) |
 | `checkout.payment.failed` | `rejected` |
-| `card.payment.failed` | `rejected` |
 | `checkout.payment.refunded` | `refunded` |
 | `checkout.payment.disputed` | Log / processo manual chargeback |
 
@@ -1550,7 +1559,7 @@ Após validar HMAC, processe `paid` para liberar produto mesmo se consulta à AP
 - [ ] URL HTTPS pública
 - [ ] `signing_secret` persistido no host
 - [ ] Validação HMAC + janela 5 min
-- [ ] Tratar `checkout.payment.paid` e `card.payment.succeeded`
+- [ ] Tratar `checkout.payment.paid`
 - [ ] Worker de entrega em produção
 - [ ] Pedido com `gateway_id` antes do pagamento
 
@@ -1559,26 +1568,28 @@ Após validar HMAC, processe `paid` para liberar produto mesmo se consulta à AP
 <!-- module: 12-webhooks-pix-med -->
 
 
-# Webhooks PIX — reembolso e MED
+# Webhooks PIX — pagamento, reembolso e MED
 
 ## INSTRUÇÕES PARA O MODELO
 
 1. Cadastre eventos `pix.payment.*` no mesmo endpoint ou em endpoint dedicado — mesma validação HMAC do módulo 11.
-2. APIs de reembolso e MED estão nos módulos **18** e **19** — este arquivo cobre **notificações outbound**.
-3. Worker `integrator-webhook-worker` + RabbitMQ obrigatórios para entrega.
+2. **`pix.payment.paid`** é o canal principal para marcar pedido PIX pago — implemente handler idempotente.
+3. Mantenha **reconciliação em background** (módulo 21) como fallback se o webhook falhar.
+4. Worker `integrator-webhook-worker` + RabbitMQ obrigatórios para entrega.
 
 ## Quando usar este módulo
 
-Parceiro que automatiza pós-venda PIX: devolução confirmada e ciclo de disputa MED.
+Integrador PIX: confirmar pagamento, automatizar pós-venda (reembolso) e ciclo MED.
 
 ## Cadastro de eventos
 
-No painel `/webhooks` ou:
+No painel `/api?tab=webhooks` ou:
 
 ```json
 {
   "url": "https://seu-servidor.com/webhooks/cajupay",
   "event_types": [
+    "pix.payment.paid",
     "pix.payment.refunded",
     "pix.payment.med_opened",
     "pix.payment.med_resolved"
@@ -1600,9 +1611,30 @@ Igual ao módulo 11:
 
 | `type` | Quando | Ação sugerida no parceiro |
 |--------|--------|---------------------------|
+| `pix.payment.paid` | PIX confirmado na CajuPay | Marcar pedido pago; liberar produto/serviço |
 | `pix.payment.refunded` | Reembolso PIX confirmado (`devolvido`) | Marcar pedido reembolsado; revogar acesso |
 | `pix.payment.med_opened` | MED aberta pelo banco | Alertar seller; bloquear reembolso manual; exibir em `/disputas` |
 | `pix.payment.med_resolved` | MED encerrada | Atualizar UI conforme `outcome` |
+
+## `data.object` — pagamento confirmado (`pix.payment.paid`)
+
+```json
+{
+  "gateway": "cajupay",
+  "cajupay_payment_id": "uuid-pagamento",
+  "pay_account_id": "uuid-conta",
+  "amount_cents": 4990,
+  "currency": "BRL",
+  "status": "paid",
+  "product_ref": "pedido-interno-123",
+  "customer_ref": "cliente-456",
+  "psp_reference": "txid-ou-ref-psp",
+  "partner_checkout_url": "https://loja.com/checkout/pedido-123",
+  "metadata": { "order_id": "123" }
+}
+```
+
+Correlacionar pelo `cajupay_payment_id` salvo ao `POST /api/payments/pix`.
 
 ## `data.object` — reembolso (`pix.payment.refunded`)
 
@@ -1673,12 +1705,13 @@ Use `id` do envelope (UUID determinístico por evento lógico). O mesmo evento r
 
 | Operação | API (módulo) | Webhook |
 |----------|--------------|---------|
+| Criar cobrança PIX | 10 — POST /api/payments/pix | `pix.payment.paid` quando pago |
 | Pedir reembolso | 18 — POST pix-refund | `pix.payment.refunded` quando concluir |
 | Consultar reembolso | 18 — GET pix-refund | — |
 | Listar MED | 19 — GET /api/med | `med_opened` / `med_resolved` |
 | Enviar defesa | 19 — POST defense | — |
 
-Polling da API complementa webhook (não substitui).
+Webhook + job de reconciliação (módulo 21) — não dependa só de polling na página do QR.
 
 ## Reembolso cartão (webhook distinto)
 
@@ -1691,9 +1724,11 @@ Não confundir com `pix.payment.refunded`.
 ## Checklist
 
 - [ ] Handler HMAC único para checkout + pix events
-- [ ] `pix.payment.*` cadastrados se o parceiro usa PIX pós-venda
+- [ ] Tratar `pix.payment.paid` (marcar pedido pago)
+- [ ] `pix.payment.*` cadastrados (ou wildcard)
 - [ ] Worker de entrega ativo
-- [ ] Módulos 18 e 19 implementados no painel do parceiro
+- [ ] Reconciliação background (módulo 21) como fallback
+- [ ] Módulos 18 e 19 se pós-venda MED/reembolso
 
 ---
 
@@ -1904,14 +1939,15 @@ Endpoint **seu** (exemplo): `GET /checkout/order-status?token={polling_token}`
 
 UI: `Aguardando confirmação do pagamento…`
 
-## PIX — reconciliação em background (servidor)
+## PIX — webhook + reconciliação em background (servidor)
 
 Para cobranças `POST /api/payments/pix` (sem sessão SDK):
 
 | Aspecto | Recomendação |
 |---------|----------------|
-| Onde roda | **Worker/cron no backend** do integrador — não só JavaScript na página do QR |
-| API | `GET https://api.cajupay.com.br/api/payments?limit=...` com `X-API-Key` + `X-API-Secret` |
+| Webhook principal | **`pix.payment.paid`** (módulo 12) — marcar pedido pago ao receber |
+| Fallback | **Worker/cron no backend** do integrador — não depender só do webhook |
+| API fallback | `GET https://api.cajupay.com.br/api/payments?limit=...` com `X-API-Key` + `X-API-Secret` |
 | Correlacionar | `payment_id` (UUID da resposta do POST) salvo em `gateway_id` / pedido interno |
 | Intervalo | **60–120 s** por pedido `pending` |
 | Janela | **6–12 h** após criar a cobrança; parar em `paid`, `cancelled` ou expirado |
@@ -1984,6 +2020,7 @@ Revise o código gerado contra esta lista antes de considerar a integração com
 | 15 | Slugs `applepay` / `googlepay` | Usar underscore |
 | 16 | Re-serializar JSON para validar HMAC webhook | Raw body bytes |
 | 17 | Reconciliar PIX só na tela do QR / só webhook | Job servidor: `GET /api/payments` a cada 1–2 min (módulo 21) |
+| 18 | Omitir `partner_checkout_url` em produção | Enviar URL HTTPS do checkout no site do parceiro (compliance) |
 
 ## Checklist de produção — SDK embed
 
@@ -2015,7 +2052,9 @@ Revise o código gerado contra esta lista antes de considerar a integração com
 - [ ] `POST /api/payments/pix` no servidor
 - [ ] `Idempotency-Key`
 - [ ] `payment_id` no pedido
-- [ ] Webhook `pix.payment.*` cadastrado e validado (HMAC)
+- [ ] `partner_checkout_url` na criação (recomendado — compliance)
+- [ ] Webhook `pix.payment.paid` cadastrado e validado (HMAC)
+- [ ] Handler idempotente para `pix.payment.paid` (marcar pedido pago)
 - [ ] Job de reconciliação em background (`GET /api/payments`, 60–120 s, janela 6–12 h)
 - [ ] Fulfillment `paid` idempotente (webhook + reconciliação)
 
@@ -2566,7 +2605,7 @@ async function submitMedDefense(disputeId, text, filePaths) {
 
 ## INSTRUÇÕES PARA O MODELO
 
-1. **Webhook PIX não é garantia única** — implemente reconciliação em background no servidor do integrador.
+1. **Webhook `pix.payment.paid` + reconciliação** — webhook é o canal principal; job em background é fallback obrigatório.
 2. **Não reconciliar só na tela do QR** — se o comprador sair da página, o pedido pode ficar `pending` para sempre.
 3. Use **`GET /api/payments`** no servidor com o `payment_id` salvo no pedido interno.
 4. Ao gerar código com IA, inclua job/cron + idempotência no handler de `paid`.
@@ -2576,10 +2615,10 @@ async function submitMedDefense(disputeId, text, filePaths) {
 Quando o comprador paga um PIX na CajuPay:
 
 1. A CajuPay processa o pagamento no PSP/adquirente.
-2. A CajuPay envia **uma notificação** (webhook outbound) para o sistema do integrador — **uma vez por evento**.
+2. A CajuPay envia webhook **`pix.payment.paid`** para o integrador (evento outbound, módulo 12).
 3. O integrador deve marcar o pedido interno como pago e liberar o produto/serviço.
 
-**Problema comum:** o webhook pode **não chegar** ou **não ser processado** (timeout, deploy, fila cheia, bug, URL errada, retry esgotado). Isso é normal em integrações de pagamento.
+**Problema comum:** a entrega do webhook pode **falhar** ou o handler pode **não processar** (timeout, deploy, fila cheia, bug, URL errada, retry esgotado). Por isso mantenha reconciliação em background.
 
 **Outro problema comum:** o integrador só faz **polling na página do QR** (JavaScript na tela esperando o webhook). Se o cliente paga e **não volta** para essa tela, o pedido continua `pending` no sistema do integrador — mesmo já estando `paid` na CajuPay.
 
@@ -2692,3 +2731,191 @@ Ver também: [03-security-idempotency-errors.md](03-security-idempotency-errors.
 - [ ] `GET /api/payments` com API Keys no servidor
 - [ ] Fulfillment idempotente (`paid`)
 - [ ] Secret nunca no frontend
+
+---
+
+<!-- module: 22-platform-webhook-bootstrap -->
+
+
+# Bootstrap de webhook ao salvar credenciais (plataformas)
+
+## INSTRUÇÕES PARA O MODELO
+
+1. Ao implementar tela **“Conectar CajuPay”** em ERP/SaaS/loja, **sempre** chamar `POST /api/webhooks/endpoints/register` logo após validar e persistir `gpk_` + `gsk_`.
+2. Use URL **fixa da plataforma** (HTTPS), ex.: `https://minha-plataforma.com/webhooks/cajupay` — a CajuPay **não descobre** a URL do integrador.
+3. Guarde **três** segredos server-side por lojista/conta: `CAJUPAY_API_KEY`, `CAJUPAY_API_SECRET`, `CAJUPAY_WEBHOOK_SECRET` (`cwhsec_`).
+4. Sem webhook `checkout.payment.paid`, cartão pode ficar **aprovado na CajuPay** e **pendente** no sistema do parceiro. Para **PIX**, inclua `pix.payment.*` ou `pix.payment.paid` no register (ou `[]` para todos).
+5. Re-salvar credenciais: register é **idempotente** (HTTP 200, `signing_secret` omitido). Secret perdido: `rotate_if_exists: true`.
+6. **Não altere** o fluxo legado `POST /api/webhooks/endpoints` — continua criando endpoint novo (não idempotente).
+
+## Quando usar este módulo
+
+Você desenvolve uma **plataforma** (ERP, marketplace, SaaS) onde o lojista cola credenciais CajuPay — o backend da plataforma deve auto-registrar o webhook.
+
+## Três segredos (checklist)
+
+| Variável | Prefixo | Uso |
+|----------|---------|-----|
+| `CAJUPAY_API_KEY` | `gpk_` | Header `X-API-Key` (outbound) |
+| `CAJUPAY_API_SECRET` | `gsk_` | Header `X-API-Secret` (outbound) |
+| `CAJUPAY_WEBHOOK_SECRET` | `cwhsec_` | HMAC dos POST inbound |
+
+- `gsk_` pode ser **revelado** no painel (`POST /api/api-keys/reveal`) se criptografado.
+- `cwhsec_` **não tem reveal** — só na criação, `rotate_if_exists: true` ou `PATCH rotate_secret`.
+
+## API — register idempotente
+
+```http
+POST https://api.cajupay.com.br/api/webhooks/endpoints/register
+X-API-Key: gpk_...
+X-API-Secret: gsk_...
+Content-Type: application/json
+
+{
+  "url": "https://sua-plataforma.com/webhooks/cajupay",
+  "description": "Merchant 12345 via MeuERP",
+  "event_types": ["checkout.payment.*", "pix.payment.*"],
+  "rotate_if_exists": false
+}
+```
+
+| Campo | Comportamento |
+|-------|----------------|
+| `url` | Obrigatório; HTTPS em produção; validação anti-SSRF |
+| `event_types` | Omitir = default `checkout.payment.*` (cartão/wallets). Para PIX: adicione `pix.payment.*` ou `pix.payment.paid`. `[]` = todos os eventos |
+| `rotate_if_exists` | `true` se endpoint já existe e você perdeu o `cwhsec_` |
+
+Resposta **201** (criado):
+
+```json
+{
+  "endpoint": { "id": "...", "url": "...", "enabled": true, "event_types": ["checkout.payment.*"] },
+  "created": true,
+  "already_exists": false,
+  "signing_secret": "cwhsec_..."
+}
+```
+
+Resposta **200** (já existia):
+
+```json
+{
+  "endpoint": { "..." },
+  "created": false,
+  "already_exists": true,
+  "message": "Endpoint already registered. signing_secret is only returned on creation or when rotate_if_exists is true; use PATCH rotate_secret otherwise."
+}
+```
+
+## API — status da integração
+
+```http
+GET https://api.cajupay.com.br/api/webhooks/setup-status
+X-API-Key: gpk_...
+X-API-Secret: gsk_...
+```
+
+```json
+{
+  "has_enabled_endpoint": true,
+  "endpoint_count": 1,
+  "subscribes_checkout_events": true
+}
+```
+
+Use na UI da plataforma para avisar o lojista se falta webhook de checkout.
+
+## Fluxo na plataforma
+
+```mermaid
+sequenceDiagram
+  participant Lojista
+  participant Plataforma as BackendPlataforma
+  participant CajuPay as CajuPayAPI
+
+  Lojista->>Plataforma: Salva gpk_ + gsk_
+  Plataforma->>Plataforma: Criptografa credenciais
+  Plataforma->>CajuPay: POST /api/webhooks/endpoints/register
+  CajuPay-->>Plataforma: cwhsec_ se created
+  Plataforma->>Plataforma: Persiste CAJUPAY_WEBHOOK_SECRET
+  CajuPay->>Plataforma: checkout.payment.paid HMAC
+  Plataforma->>Plataforma: Marca pedido pago
+```
+
+## Node — ao salvar credenciais
+
+```javascript
+const CAJUPAY_API = "https://api.cajupay.com.br";
+const PLATFORM_WEBHOOK_URL = "https://sua-plataforma.com/webhooks/cajupay";
+
+async function onMerchantSaveCredentials(merchantId, gpk, gsk) {
+  await vault.put(merchantId, { apiKey: gpk, apiSecret: gsk });
+
+  const res = await fetch(`${CAJUPAY_API}/api/webhooks/endpoints/register`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": gpk,
+      "X-API-Secret": gsk,
+    },
+    body: JSON.stringify({
+      url: PLATFORM_WEBHOOK_URL,
+      description: `Merchant ${merchantId}`,
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  if (data.signing_secret) {
+    await vault.putWebhookSecret(merchantId, data.signing_secret);
+  }
+}
+```
+
+## PHP — register após salvar chaves
+
+```php
+function bootstrapCajuPayWebhook(string $gpk, string $gsk, string $platformUrl): ?string {
+    $ch = curl_init('https://api.cajupay.com.br/api/webhooks/endpoints/register');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'X-API-Key: ' . $gpk,
+            'X-API-Secret: ' . $gsk,
+        ],
+        CURLOPT_POSTFIELDS => json_encode(['url' => $platformUrl]),
+        CURLOPT_RETURNTRANSFER => true,
+    ]);
+    $body = curl_exec($ch);
+    $data = json_decode($body, true);
+    return $data['signing_secret'] ?? null;
+}
+```
+
+## DO / DON'T
+
+| DO | DON'T |
+|----|-------|
+| URL fixa controlada pela plataforma | Depender do lojista cadastrar webhook manualmente |
+| Persistir `cwhsec_` criptografado por tenant | Expor secrets no frontend |
+| Idempotência: chamar register a cada save | Criar endpoint duplicado a cada save (use `/register`, não `/endpoints` em loop) |
+| Validar HMAC no handler inbound | Confiar só em polling para cartão |
+
+## Erros comuns
+
+| Problema | Correção |
+|----------|----------|
+| Venda cartão pendente no ERP | Implementar register + handler `checkout.payment.paid` |
+| Venda PIX pendente no ERP | Register com `pix.payment.*` + handler `pix.payment.paid` + reconciliação fallback (módulo 21) |
+| `signing_secret` null no 2º save | Esperado — use secret já guardado ou `rotate_if_exists: true` |
+| `403 forbidden` | API key sem `webhooks.write` |
+| `url_host_blocked_ip` | URL aponta para IP privado — use domínio público HTTPS |
+
+## Checklist
+
+- [ ] Register automático ao salvar `gpk_`/`gsk_`
+- [ ] `CAJUPAY_WEBHOOK_SECRET` por lojista/conta
+- [ ] Handler inbound com HMAC (módulo 11)
+- [ ] Pedido com `gateway_id = checkout_session_id` antes do paid
+- [ ] `GET /api/webhooks/setup-status` na UI de integração (opcional)
+- [ ] Worker `integrator-webhook-worker` + RabbitMQ em produção CajuPay

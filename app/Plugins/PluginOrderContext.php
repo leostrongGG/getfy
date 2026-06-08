@@ -3,6 +3,7 @@
 namespace App\Plugins;
 
 use App\Models\Order;
+use App\Plugins\Commerce\CommerceCheckoutContextRegistry;
 
 /**
  * DTO estável de pedido para listeners de plugins (envio, ERP, etc.).
@@ -41,7 +42,10 @@ class PluginOrderContext
                 'amount' => (float) ($item->amount ?? 0),
             ];
         }
-        if ($lineItems === [] && $order->product) {
+        $registryItems = CommerceCheckoutContextRegistry::resolveLineItems($order);
+        if ($registryItems !== null && $registryItems !== []) {
+            $lineItems = $registryItems;
+        } elseif ($lineItems === [] && $order->product) {
             $lineItems[] = [
                 'product_id' => $order->product_id,
                 'name' => $order->product->name,

@@ -73,20 +73,33 @@ class PixCheckoutDisplay
         return $copyPaste !== '' || $qrcode !== '';
     }
 
+    public static function hasPixPayload(array $metadata): bool
+    {
+        $copyPaste = trim((string) ($metadata['pix_copy_paste'] ?? ''));
+        $qrcode = trim((string) ($metadata['pix_qrcode'] ?? ''));
+
+        return $copyPaste !== '' || $qrcode !== '';
+    }
+
     /**
      * @return array{qrcode: ?string, copy_paste: ?string, created_at: int}|null
      */
-    public static function pixDataFromOrder(Order $order): ?array
+    public static function pixDataFromOrder(Order $order, bool $relaxed = false): ?array
     {
         $meta = is_array($order->metadata) ? $order->metadata : [];
-        if (! static::isPixMetadataValid($meta)) {
+        if (! $relaxed && ! static::isPixMetadataValid($meta)) {
             return null;
         }
+        if ($relaxed && ! static::hasPixPayload($meta)) {
+            return null;
+        }
+
+        $generatedAt = (int) ($meta['pix_generated_at'] ?? 0);
 
         return [
             'qrcode' => $meta['pix_qrcode'] ?? null,
             'copy_paste' => $meta['pix_copy_paste'] ?? null,
-            'created_at' => (int) $meta['pix_generated_at'],
+            'created_at' => $generatedAt > 0 ? $generatedAt : time(),
         ];
     }
 }

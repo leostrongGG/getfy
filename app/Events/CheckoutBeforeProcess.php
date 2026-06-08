@@ -16,9 +16,16 @@ class CheckoutBeforeProcess
      */
     public ?string $abort = null;
 
+    /** Ajuste de valor (ex.: frete) somado ao total do pedido. */
+    public float $amountAdjustment = 0.0;
+
+    /** Metadata extra gravada no pedido (merge com metadata existente). */
+    public array $orderMetadata = [];
+
     public function __construct(
         public Product $product,
         public array $validated,
         public ?CommerceCart $cart = null,
+        public array $pluginCheckoutData = [],
     ) {}
 }

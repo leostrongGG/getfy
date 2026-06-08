@@ -62,6 +62,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'partner.panel' => \App\Http\Middleware\EnsurePartnerPanel::class,
             'storefront.tenant' => \App\Http\Middleware\ResolveStorefrontTenant::class,
             'plugin.api.signature' => \App\Http\Middleware\VerifyPluginApiSignature::class,
+            'plugin.commerce.scope' => \App\Http\Middleware\EnforcePluginCommerceScope::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
@@ -74,7 +75,7 @@ return Application::configure(basePath: dirname(__DIR__))
         });
 
         $exceptions->render(function (ExistingPixCheckoutRedirect $e, Request $request) {
-            return PendingPixCheckoutResolver::redirectToPixPage($e->order, $e->request);
+            return PendingPixCheckoutResolver::redirectToPixPage($e->order, $e->request, $e->relaxed);
         });
 
         $exceptions->render(function (ThrottleRequestsException|TooManyRequestsHttpException $e, Request $request) {
@@ -143,7 +144,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('checkout:fire-abandoned-cart-webhooks')->everyTenMinutes();
         $schedule->command('checkout:send-cart-recovery-emails')->everyMinute();
         $schedule->command('email-campaign:process')->everyMinute();
-        $schedule->command('payments:reconcile-pending --limit=200 --days=45')->everyTwoMinutes();
+        $schedule->command('payments:reconcile-pending --limit=200 --days=45')->everyMinute();
         $schedule->command('orders:cancel-stale-pending')->hourly();
         $schedule->command('commissions:release')->hourly();
         $schedule->command('payouts:reconcile')->everyTenMinutes();

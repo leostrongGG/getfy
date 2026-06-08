@@ -5,6 +5,8 @@ import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import Button from '@/components/ui/Button.vue';
 import ProdutosTabs from '@/components/produtos/ProdutosTabs.vue';
 import ProdutoCreateSidebar from '@/components/produtos/ProdutoCreateSidebar.vue';
+import PluginRuntimeMount from '@/components/plugins/PluginRuntimeMount.vue';
+import PluginRenderZone from '@/components/plugins/PluginRenderZone.vue';
 import {
     MoreVertical,
     Pencil,
@@ -105,6 +107,7 @@ function pluginActions(productId) {
                 Novo produto
             </Button>
         </div>
+        <PluginRenderZone zone="produtos.index.after_toolbar" />
 
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div
@@ -200,8 +203,15 @@ function pluginActions(productId) {
                                     Excluir
                                 </button>
                                 <template v-for="(action, actIdx) in pluginActions(p.id)" :key="`plugin-${p.id}-${actIdx}`">
+                                    <div
+                                        v-if="action.ui_mode === 'runtime'"
+                                        class="px-3 py-2"
+                                        @click="closeMenu"
+                                    >
+                                        <PluginRuntimeMount :item="action" :context="{ product: p }" />
+                                    </div>
                                     <a
-                                        v-if="action.href"
+                                        v-else-if="action.href"
                                         :href="action.href"
                                         class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
                                         @click="closeMenu"

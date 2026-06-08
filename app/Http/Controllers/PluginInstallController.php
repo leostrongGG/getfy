@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Plugins\PluginClassAutoloader;
 use App\Plugins\PluginRegistry;
 use App\Services\PluginStoreService;
 use Illuminate\Http\RedirectResponse;
@@ -257,6 +258,7 @@ class PluginInstallController extends Controller
             ]);
         }
         PluginRegistry::register($pluginSlug);
+        PluginClassAutoloader::refreshPrefixes();
         $migrationsPath = $plugin['migrations'] ?? null;
         if (is_string($migrationsPath) && $migrationsPath !== '') {
             $fullPath = $plugin['path'].DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $migrationsPath);

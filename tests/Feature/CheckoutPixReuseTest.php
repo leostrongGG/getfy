@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Support\PendingPixCheckoutResolver;
 use App\Support\PixCheckoutDisplay;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
 class CheckoutPixReuseTest extends TestCase
@@ -16,6 +17,7 @@ class CheckoutPixReuseTest extends TestCase
     {
         parent::setUp();
         config(['checkout_security.enabled' => true]);
+        Cache::flush();
     }
 
     public function test_middleware_redirects_to_existing_pix_without_new_order(): void
@@ -99,6 +101,58 @@ class CheckoutPixReuseTest extends TestCase
 
         $this->assertTrue($response->isRedirect());
         $this->assertStringContainsString('checkout/pix', $response->getTargetUrl());
+    }
+
+    public function test_find_reusable_relaxed_finds_expired_pix_payload(): void
+    {
+        $buyer = User::factory()->create(['role' => User::ROLE_ALUNO, 'tenant_id' => 1]);
+        $product = $this->createTestProduct();
+
+        $order = $this->createPendingPixOrder($buyer, $product, 'relaxed@test.com');
+        $order->update([
+            'metadata' => array_merge($order->metadata ?? [], [
+                'pix_generated_at' => time() - PixCheckoutDisplay::EXPIRY_SECONDS - 60,
+            ]),
+        ]);
+
+        $request = Request::create('/checkout', 'POST', [
+            'product_id' => $product->id,
+            'payment_method' => 'pix',
+            'email' => 'relaxed@test.com',
+        ]);
+
+        $this->assertNull(PendingPixCheckoutResolver::findReusable($request));
+        $this->assertNotNull(PendingPixCheckoutResolver::findReusableRelaxed($request));
+    }
+
+    public function test_flood_threshold_redirects_to_relaxed_pix_without_new_order(): void
+    {
+        User::factory()->create(['role' => User::ROLE_INFOPRODUTOR, 'tenant_id' => 1]);
+        $buyer = User::factory()->create(['role' => User::ROLE_ALUNO, 'tenant_id' => 1]);
+        $product = $this->createTestProduct(['price' => 99]);
+
+        $order = $this->createPendingPixOrder($buyer, $product, 'flood@test.com');
+        $order->update([
+            'metadata' => array_merge($order->metadata ?? [], [
+                'pix_generated_at' => time() - PixCheckoutDisplay::EXPIRY_SECONDS - 60,
+            ]),
+        ]);
+
+        $floodKey = 'checkout_flood_pix:'.sha1('flood@test.com|'.$product->id);
+        Cache::put($floodKey, 3, now()->addMinute());
+
+        $response = $this->post('/checkout', [
+            'product_id' => $product->id,
+            'payment_method' => 'pix',
+            'email' => 'flood@test.com',
+            'name' => 'Flood Buyer',
+            'cpf' => '52998224725',
+            'phone' => '11999999999',
+        ]);
+
+        $response->assertRedirect();
+        $this->assertStringContainsString('checkout/pix', (string) $response->headers->get('Location'));
+        $this->assertSame(1, Order::query()->count());
     }
 
     public function test_relaxed_rate_limit_defaults(): void

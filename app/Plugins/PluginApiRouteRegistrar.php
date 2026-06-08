@@ -6,16 +6,6 @@ use Illuminate\Support\Facades\Route;
 
 class PluginApiRouteRegistrar
 {
-    /** @var list<string> */
-    private const ALLOWED_MIDDLEWARE = [
-        'api',
-        'web',
-        'auth',
-        'plugin.api.signature',
-        'throttle:60,1',
-        'throttle:120,1',
-    ];
-
     /**
      * @param  array<string, mixed>  $plugin
      */
@@ -49,7 +39,7 @@ class PluginApiRouteRegistrar
             if (! empty($decl['middleware']) && is_array($decl['middleware'])) {
                 $filtered = [];
                 foreach ($decl['middleware'] as $mw) {
-                    if (is_string($mw) && in_array($mw, self::ALLOWED_MIDDLEWARE, true)) {
+                    if (is_string($mw) && PluginMiddlewareRegistry::isAllowedForApi($mw)) {
                         $filtered[] = $mw;
                     }
                 }
@@ -64,11 +54,18 @@ class PluginApiRouteRegistrar
         }
 
         $prefix = trim($prefix, '/');
+        $load = static function () use ($routesFile) {
+            require $routesFile;
+        };
         Route::middleware(array_values(array_unique($middleware)))
             ->prefix($prefix)
-            ->group(function () use ($routesFile) {
-                require $routesFile;
-            });
+            ->group($load);
+
+        if (! str_starts_with($prefix, 'api/v1/')) {
+            Route::middleware(array_values(array_unique($middleware)))
+                ->prefix('api/v1/plugins/'.$slug)
+                ->group($load);
+        }
     }
 
     /**

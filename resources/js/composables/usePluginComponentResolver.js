@@ -1,4 +1,5 @@
 import { defineAsyncComponent } from 'vue';
+import { resolveSlot } from '@getfy/plugin-sdk';
 import { buildPluginUiIndex, resolvePluginSlotComponent } from '@/plugins/pluginUiLoader';
 
 /**
@@ -33,6 +34,15 @@ export function usePluginComponentResolver(pluginUiRef, pluginPagesGlob) {
         if (runtime) {
             cache.set(cacheKey, runtime);
             return runtime;
+        }
+
+        const slotId = slotItem.slot_id ?? slotItem.id;
+        if (slotId) {
+            const registered = resolveSlot(slotId);
+            if (registered) {
+                cache.set(cacheKey, registered);
+                return registered;
+            }
         }
 
         const componentName = slotItem.component;

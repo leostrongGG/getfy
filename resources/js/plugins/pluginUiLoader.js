@@ -1,4 +1,5 @@
 import { defineAsyncComponent, h } from 'vue';
+import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 
 /** @type {Map<string, Promise<void>>} */
 const scriptLoadPromises = new Map();
@@ -10,8 +11,20 @@ const pluginExportRegistry = new Map();
  * @param {string} entryUrl
  * @param {string} slug
  */
-function loadPluginScript(entryUrl, slug) {
+function pluginHasExport(slug, exportName) {
+    return Boolean(window.__GETFY_PLUGIN_UI__?.[slug]?.[exportName]);
+}
+
+function removePluginScript(slug) {
+    document.querySelector(`script[data-plugin-ui="${slug}"]`)?.remove();
+    scriptLoadPromises.delete(slug);
+}
+
+function loadPluginScript(entryUrl, slug, exportName = null) {
     const key = slug;
+    if (exportName && pluginHasExport(slug, exportName)) {
+        return Promise.resolve();
+    }
     if (scriptLoadPromises.has(key)) {
         return scriptLoadPromises.get(key);
     }
@@ -22,21 +35,41 @@ function loadPluginScript(entryUrl, slug) {
         }
         const existing = document.querySelector(`script[data-plugin-ui="${slug}"]`);
         if (existing) {
-            resolve();
-            return;
+            if (exportName && !pluginHasExport(slug, exportName)) {
+                existing.remove();
+                scriptLoadPromises.delete(key);
+            } else {
+                resolve();
+                return;
+            }
         }
         const script = document.createElement('script');
         script.type = 'module';
-        script.src = entryUrl;
+        script.src = `${entryUrl}${entryUrl.includes('?') ? '&' : '?'}v=${Date.now()}`;
         script.async = true;
         script.dataset.pluginUi = slug;
         script.onload = () => resolve();
-        script.onerror = () => reject(new Error(`Falha ao carregar UI do plugin "${slug}"`));
+        script.onerror = () => {
+            removePluginScript(slug);
+            reject(new Error(`Falha ao carregar UI do plugin "${slug}"`));
+        };
         document.head.appendChild(script);
     });
     scriptLoadPromises.set(key, promise);
 
     return promise;
+}
+
+async function waitForPluginExport(slug, exportName, attempts = 40) {
+    for (let i = 0; i < attempts; i += 1) {
+        const loaded = window.__GETFY_PLUGIN_UI__?.[slug]?.[exportName];
+        if (loaded) {
+            return loaded;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    return null;
 }
 
 /**
@@ -88,8 +121,13 @@ export async function ensurePluginUiLoaded(pluginMeta, exportName) {
     if (cached) {
         return cached;
     }
-    await loadPluginScript(pluginMeta.entry, slug);
-    const loaded = window.__GETFY_PLUGIN_UI__?.[slug]?.[exportName];
+    await loadPluginScript(pluginMeta.entry, slug, exportName);
+    let loaded = await waitForPluginExport(slug, exportName);
+    if (!loaded) {
+        removePluginScript(slug);
+        await loadPluginScript(pluginMeta.entry, slug, exportName);
+        loaded = await waitForPluginExport(slug, exportName);
+    }
     if (!loaded) {
         throw new Error(`Export "${exportName}" não encontrado no plugin "${slug}"`);
     }
@@ -165,11 +203,27 @@ export function resolvePluginPageComponent(componentName, pluginUiPayload) {
     if (!exportName || !meta?.entry) {
         return null;
     }
-    return defineAsyncComponent({
-        loader: async () => ensurePluginUiLoaded(meta, exportName),
+
+    const AsyncContent = defineAsyncComponent({
+        loader: () => ensurePluginUiLoaded(meta, exportName),
         errorComponent: PluginUiError(slug, `Erro ao carregar página "${page}" do plugin`),
         timeout: 30000,
     });
+
+    const Page = {
+        name: `PluginRuntimePage_${slug}_${page}`,
+        props: {
+            pluginSlug: { type: String, default: '' },
+            pluginPage: { type: String, default: '' },
+            plugin_ui_page: { type: Object, default: null },
+        },
+        setup(props) {
+            return () => h(AsyncContent, props);
+        },
+    };
+    Page.layout = LayoutInfoprodutor;
+
+    return Page;
 }
 
 export function getPluginUiPayloadFromDom() {

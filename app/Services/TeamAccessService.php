@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Models\User;
+use App\Plugins\PluginCapabilityRegistry;
 
 class TeamAccessService
 {
@@ -76,7 +77,7 @@ class TeamAccessService
      */
     public function allPermissions(): array
     {
-        return [
+        $perms = [
             'dashboard.view' => true,
             'vendas.view' => true,
             'reembolsos.view' => true,
@@ -93,6 +94,12 @@ class TeamAccessService
             'financeiro.view' => true,
             'financeiro.manage' => true,
         ];
+
+        foreach (array_keys(PluginCapabilityRegistry::all()) as $pluginPermission) {
+            $perms[$pluginPermission] = true;
+        }
+
+        return $perms;
     }
 }
 

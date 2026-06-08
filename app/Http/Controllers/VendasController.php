@@ -655,6 +655,11 @@ class VendasController extends Controller
 
     private function productDisplayName(Order $order): string
     {
+        $pluginLabel = \App\Plugins\Commerce\CommerceCheckoutContextRegistry::resolveOrderLabel($order);
+        if ($pluginLabel !== null && $pluginLabel !== '') {
+            return $pluginLabel;
+        }
+
         $product = $order->product;
         if (! $product) {
             return '—';

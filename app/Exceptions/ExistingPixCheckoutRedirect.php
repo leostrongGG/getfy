@@ -11,6 +11,7 @@ class ExistingPixCheckoutRedirect extends RuntimeException
     public function __construct(
         public readonly Order $order,
         public readonly Request $request,
+        public readonly bool $relaxed = false,
     ) {
         parent::__construct('Existing pending PIX checkout.');
     }

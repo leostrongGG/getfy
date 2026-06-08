@@ -3,12 +3,16 @@
 namespace App\Services\Commerce;
 
 use App\Events\BoletoGenerated;
+use App\Events\CheckoutBeforeProcess;
 use App\Events\OrderCompleted;
 use App\Events\OrderPending;
 use App\Events\PixGenerated;
 use App\Models\CommerceCheckoutSession;
 use App\Models\Order;
 use App\Models\Product;
+use App\Plugins\Commerce\CommerceCheckoutContextRegistry;
+use App\Plugins\PluginCheckoutExtensionRegistry;
+use App\Plugins\PluginHookBus;
 use App\Services\CheckoutAbuseGuard;
 use App\Services\PaymentService;
 use App\Support\FakeConsumerData;
@@ -32,24 +36,21 @@ class CommerceCheckoutPaymentService
 
         $tenantId = (int) $session->tenant_id;
         $product = $order->product;
-        if ($product && ! $product->is_active) {
+        $isPluginCheckout = CommerceCheckoutContextRegistry::supports($order);
+        if ($product && ! $product->is_active && ! $isPluginCheckout) {
             return redirect()->back()->with('error', 'Produto indisponível.');
         }
 
+        $registryGateway = CommerceCheckoutContextRegistry::resolveGatewayConfig($order);
         $config = is_array($product?->checkout_config) ? $product->checkout_config : [];
-        $gatewayConfig = is_array($config['payment_gateways'] ?? null)
+        $gatewayConfig = $registryGateway ?? (is_array($config['payment_gateways'] ?? null)
             ? $config['payment_gateways']
-            : [];
+            : []);
 
         $method = $validated['payment_method'];
         $pg = $gatewayConfig;
-        if ($method === 'pix' && empty($pg['pix'])) {
-            return redirect()->back()->with('error', 'Método de pagamento não disponível.');
-        }
-        if ($method === 'card' && empty($pg['card'])) {
-            return redirect()->back()->with('error', 'Método de pagamento não disponível.');
-        }
-        if ($method === 'boleto' && empty($pg['boleto'])) {
+        $methodAvailable = $this->methodAvailable($tenantId, $pg, $method);
+        if (! $methodAvailable) {
             return redirect()->back()->with('error', 'Método de pagamento não disponível.');
         }
 
@@ -71,6 +72,17 @@ class CommerceCheckoutPaymentService
         if ($product) {
             $request->merge(['email' => $email, 'product_id' => $product->id, 'payment_method' => $method]);
             app(CheckoutAbuseGuard::class)->assertCanCreateCheckout($request, $product);
+        }
+
+        $pluginCheckoutData = PluginCheckoutExtensionRegistry::decodeCheckoutDataFromRequest($request);
+        if ($product) {
+            $beforeProcess = new CheckoutBeforeProcess($product, $validated, null, $pluginCheckoutData);
+            PluginCheckoutExtensionRegistry::invokeProcessHandlers($product, $validated, $pluginCheckoutData, $beforeProcess);
+            PluginHookBus::doAction('checkout.before_process', $beforeProcess, $product, $validated, $pluginCheckoutData);
+            event($beforeProcess);
+            if ($beforeProcess->abort !== null && $beforeProcess->abort !== '') {
+                return redirect()->back()->with('error', $beforeProcess->abort);
+            }
         }
 
         if ($method === 'pix') {
@@ -155,11 +167,30 @@ class CommerceCheckoutPaymentService
 
     private function productLabel(CommerceCheckoutSession $session): string
     {
+        $order = Order::find($session->order_id);
+        if ($order) {
+            $label = CommerceCheckoutContextRegistry::resolveOrderLabel($order);
+            if ($label !== null && $label !== '') {
+                return $label;
+            }
+        }
+
         $items = is_array($session->line_items) ? $session->line_items : [];
         if (count($items) > 1) {
             return count($items).' itens';
         }
 
         return (string) ($items[0]['name'] ?? 'Pedido');
+    }
+
+    /**
+     * @param  array<string, mixed>  $pg
+     */
+    private function methodAvailable(int $tenantId, array $pg, string $method): bool
+    {
+        $methods = \App\Support\CheckoutPaymentMethodsBuilder::build($tenantId, $pg, null);
+        $ids = \App\Support\CheckoutPaymentMethodsBuilder::methodIds($methods);
+
+        return in_array($method, $ids, true);
     }
 }

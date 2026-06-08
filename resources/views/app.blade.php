@@ -70,6 +70,32 @@
     </script>
     @endunless
     @inertiaHead
+    @php
+        $viteDevHot = public_path('hot');
+        $vueBridgeBuilt = public_path('build/getfy-plugin-vue.mjs');
+        $vueBridgeImport = (! file_exists($viteDevHot) && file_exists($vueBridgeBuilt))
+            ? asset('build/getfy-plugin-vue.mjs')
+            : \Illuminate\Support\Facades\Vite::asset('resources/js/plugins/getfyPluginVueBridge.js');
+    @endphp
+    <script type="importmap">
+        {"imports":{"vue":@json($vueBridgeImport)}}
+    </script>
+    @php
+        $assetContext = \App\Plugins\PluginAssetQueue::contextForRequest(request());
+        \App\Plugins\PluginAssetQueue::fireHeadHooks($assetContext);
+        $themeTokensHead = \App\Plugins\ThemeEngine::tokensForRequest(request());
+        $pluginContextStyles = \App\Plugins\PluginAssetQueue::stylesFor($assetContext);
+        $pluginContextScripts = \App\Plugins\PluginAssetQueue::scriptsFor($assetContext);
+    @endphp
+    @if (!empty($themeTokensHead))
+    <style>:root { @foreach ($themeTokensHead as $cssVar => $cssValue) {{ $cssVar }}: {{ $cssValue }}; @endforeach }</style>
+    @endif
+    @foreach ($pluginContextStyles as $asset)
+    <link rel="stylesheet" href="{{ $asset['url'] }}" data-plugin-style="{{ $asset['handle'] }}">
+    @endforeach
+    @foreach ($pluginContextScripts as $asset)
+    <script src="{{ $asset['url'] }}" @if(!empty($asset['defer'])) defer @endif data-plugin-script="{{ $asset['handle'] }}"></script>
+    @endforeach
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 <body class="antialiased">

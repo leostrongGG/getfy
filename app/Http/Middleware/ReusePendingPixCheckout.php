@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\CheckoutAbuseGuard;
 use App\Support\PendingPixCheckoutResolver;
 use Closure;
 use Illuminate\Http\Request;
@@ -22,6 +23,14 @@ class ReusePendingPixCheckout
         $order = PendingPixCheckoutResolver::findReusable($request);
         if ($order) {
             return PendingPixCheckoutResolver::redirectToPixPage($order, $request);
+        }
+
+        $guard = app(CheckoutAbuseGuard::class);
+        if ($guard->isFloodPixThresholdExceeded($request)) {
+            $relaxedOrder = PendingPixCheckoutResolver::findReusableRelaxed($request);
+            if ($relaxedOrder) {
+                return PendingPixCheckoutResolver::redirectToPixPage($relaxedOrder, $request, relaxed: true);
+            }
         }
 
         return $next($request);

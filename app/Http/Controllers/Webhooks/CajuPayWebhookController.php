@@ -8,8 +8,10 @@ use App\Models\GatewayCredential;
 use App\Models\Order;
 use App\Models\RefundRequest;
 use App\Services\RefundService;
+use App\Support\CajuPayPaymentId;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class CajuPayWebhookController extends Controller
@@ -20,21 +22,24 @@ class CajuPayWebhookController extends Controller
      * POST /webhooks/gateways/cajupay — webhooks outbound da CajuPay assinados com HMAC SHA256.
      *
      * Cabeçalhos esperados:
-     *  - X-CajuPay-Event       (ex.: checkout.payment.paid)
+     *  - X-CajuPay-Event       (ex.: checkout.payment.paid, pix.payment.paid)
      *  - X-CajuPay-Event-Id    (mesmo valor do id no envelope)
      *  - X-CajuPay-Timestamp   (unix segundos)
      *  - X-CajuPay-Signature   (formato t=<unix>,v1=<hex_hmac>)
      *
      * Assinatura: HMAC_SHA256(signing_secret, timestamp + "." + raw_body)
-     *
-     * Multi-tenant: testamos a assinatura contra cada credencial CajuPay com
-     * webhook_signing_secret salvo até casar — assim o mesmo endpoint público
-     * serve todos os tenants do Getfy.
      */
     public function handle(Request $request): JsonResponse
     {
         $raw = $request->getContent();
-        $payload = $request->all();
+        if (! is_string($raw) || $raw === '') {
+            return response()->json(['message' => 'Empty body'], 400);
+        }
+
+        $payload = json_decode($raw, true);
+        if (! is_array($payload)) {
+            return response()->json(['message' => 'Invalid JSON'], 400);
+        }
 
         $eventType = (string) ($request->header('X-CajuPay-Event') ?? ($payload['type'] ?? ''));
         $signatureHeader = (string) ($request->header('X-CajuPay-Signature') ?? '');
@@ -42,67 +47,46 @@ class CajuPayWebhookController extends Controller
 
         $sigParts = $this->parseSignatureHeader($signatureHeader);
         $signatureTs = $sigParts['t'] ?? $timestampHeader;
-        $signatureHex = $sigParts['v1'] ?? '';
+        $signatureHex = strtolower($sigParts['v1'] ?? '');
 
-        // Tolerância anti-replay: 5 minutos.
-        if ($signatureTs !== '' && is_numeric($signatureTs)) {
-            $age = abs(time() - (int) $signatureTs);
-            if ($age > 300) {
-                Log::warning('CajuPayWebhook: timestamp fora da janela', ['age_seconds' => $age]);
-                return response()->json(['message' => 'Stale timestamp'], 401);
-            }
+        if ($signatureHex === '' || $signatureTs === '' || ! is_numeric($signatureTs)) {
+            return response()->json(['message' => 'Invalid signature header'], 400);
+        }
+
+        $age = abs(time() - (int) $signatureTs);
+        if ($age > 300) {
+            Log::warning('CajuPayWebhook: timestamp fora da janela', ['age_seconds' => $age]);
+
+            return response()->json(['message' => 'Stale timestamp'], 401);
         }
 
         $object = $this->extractObject($payload);
         $sessionId = $this->pickSessionId($object);
-        $chargeId = $this->pickChargeId($object);
+        $paymentId = CajuPayPaymentId::pickFromWebhookObject($object);
 
-        $order = null;
-        if (is_string($sessionId) && $sessionId !== '') {
-            $order = Order::where('gateway', self::SLUG)
-                ->where('gateway_id', $sessionId)
-                ->first();
-            if (! $order) {
-                $order = Order::where('gateway', self::SLUG)
-                    ->where('metadata->cajupay_checkout_session_id', $sessionId)
-                    ->first();
-            }
-        }
-        if (! $order && is_string($chargeId) && $chargeId !== '') {
-            $order = Order::where('gateway', self::SLUG)
-                ->where('gateway_id', $chargeId)
-                ->first();
-        }
-        if (! $order && is_string($chargeId) && $chargeId !== '') {
-            $order = Order::where('gateway', self::SLUG)
-                ->where('metadata->cajupay_payment_id', $chargeId)
-                ->first();
-        }
-        if (! $order && is_array($object)) {
-            $clientRefundId = $object['client_refund_id'] ?? null;
-            if (is_string($clientRefundId) && $clientRefundId !== '') {
-                $refundRequest = RefundRequest::query()
-                    ->where('client_refund_id', $clientRefundId)
-                    ->first();
-                if ($refundRequest) {
-                    $order = $refundRequest->order;
-                }
-            }
+        $order = $this->findOrderForWebhook($sessionId, $paymentId, $object);
+
+        $signingSecret = $this->resolveSigningSecret($raw, (string) $signatureTs, $signatureHex, $order?->tenant_id);
+        if ($signingSecret === null) {
+            Log::warning('CajuPayWebhook: assinatura inválida ou sem signing_secret', [
+                'event' => $eventType,
+                'payment_id' => $paymentId,
+                'session_id' => $sessionId,
+                'order_id' => $order?->id,
+            ]);
+
+            return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if (! $order) {
-            $isPaidEvent = in_array($eventType, [
-                'checkout.payment.paid',
-                'card.payment.succeeded',
-            ], true);
-            if ($isPaidEvent && is_string($sessionId) && $sessionId !== '') {
-                $pollingToken = \Illuminate\Support\Facades\Cache::get('cajupay_session_by_checkout.' . $sessionId);
+        if ($order === null) {
+            if ($this->isPaidEvent($eventType) && is_string($sessionId) && $sessionId !== '') {
+                $pollingToken = Cache::get('cajupay_session_by_checkout.'.$sessionId);
                 $hasDraft = is_string($pollingToken) && $pollingToken !== ''
-                    && \Illuminate\Support\Facades\Cache::has('cajupay_draft.' . $pollingToken);
+                    && Cache::has('cajupay_draft.'.$pollingToken);
                 Log::warning('CajuPayWebhook: pagamento aprovado sem pedido no Getfy', [
                     'event' => $eventType,
                     'session_id' => $sessionId,
-                    'charge_id' => $chargeId,
+                    'payment_id' => $paymentId,
                     'draft_still_in_cache' => $hasDraft,
                     'hint' => $hasDraft
                         ? 'Cliente pode ter pago na wallet antes do confirm-order; peça para preencher dados e usar "Tentar novamente".'
@@ -112,29 +96,23 @@ class CajuPayWebhookController extends Controller
                 Log::debug('CajuPayWebhook: order not found', [
                     'event' => $eventType,
                     'session_id' => $sessionId,
-                    'charge_id' => $chargeId,
+                    'payment_id' => $paymentId,
                 ]);
             }
 
             return response()->json(['received' => true]);
         }
 
-        // Verificação HMAC: percorre as credenciais CajuPay do tenant da order
-        // (e, em fallback, todos os tenants — útil quando a order ainda não foi
-        // associada). Aceita o primeiro signing_secret que casar.
-        $signingSecret = $this->resolveSigningSecret($raw, $signatureTs, $signatureHex, $order->tenant_id);
-        if ($signingSecret === null) {
-            Log::warning('CajuPayWebhook: assinatura inválida ou sem signing_secret', [
-                'event' => $eventType,
-                'order_id' => $order->id,
-            ]);
-            return response()->json(['message' => 'Unauthorized'], 401);
+        if ($paymentId !== '') {
+            CajuPayPaymentId::persistOnOrder($order, $paymentId);
+            app(RefundService::class)->persistCajuPayPaymentId($order->fresh(), $paymentId);
+            $order->refresh();
         }
 
-        // Atualiza gateway_id para o charge_id real quando ainda estiver com session_id.
-        if (is_string($chargeId) && $chargeId !== '' && $order->gateway_id !== $chargeId) {
+        if ($paymentId !== '' && $order->gateway_id !== $paymentId) {
             try {
-                $order->update(['gateway_id' => $chargeId]);
+                $order->update(['gateway_id' => $paymentId]);
+                $order->refresh();
             } catch (\Throwable $e) {
                 Log::debug('CajuPayWebhook: falha ao atualizar gateway_id', [
                     'order_id' => $order->id,
@@ -143,27 +121,25 @@ class CajuPayWebhookController extends Controller
             }
         }
 
-        if (is_string($chargeId) && $chargeId !== '') {
-            app(RefundService::class)->persistCajuPayPaymentId($order, $chargeId);
-        }
-
-        $dispatchChargeId = (string) ($chargeId ?: $order->gateway_id ?: $sessionId);
+        $dispatchId = $paymentId !== ''
+            ? $paymentId
+            : (string) ($order->gateway_id ?: $sessionId ?: '');
         $refundId = is_array($object) && is_string($object['refund_id'] ?? null) ? $object['refund_id'] : null;
+        $webhookMeta = array_merge($payload, ['webhook_source' => 'cajupay_hmac_verified']);
 
         switch ($eventType) {
             case 'checkout.payment.paid':
+            case 'pix.payment.paid':
             case 'card.payment.succeeded':
-                ProcessPaymentWebhook::dispatchSync(self::SLUG, $dispatchChargeId, 'order.paid', 'paid', array_merge(
-                    is_array($payload) ? $payload : [],
-                    ['webhook_source' => 'cajupay_hmac_verified']
-                ));
+                if ($dispatchId !== '') {
+                    ProcessPaymentWebhook::dispatchSync(self::SLUG, $dispatchId, 'order.paid', 'paid', $webhookMeta);
+                }
                 break;
             case 'checkout.payment.failed':
             case 'card.payment.failed':
-                ProcessPaymentWebhook::dispatchSync(self::SLUG, $dispatchChargeId, 'order.rejected', 'rejected', array_merge(
-                    is_array($payload) ? $payload : [],
-                    ['webhook_source' => 'cajupay_hmac_verified']
-                ));
+                if ($dispatchId !== '') {
+                    ProcessPaymentWebhook::dispatchSync(self::SLUG, $dispatchId, 'order.rejected', 'rejected', $webhookMeta);
+                }
                 break;
             case 'checkout.payment.refunded':
             case 'card.payment.refunded':
@@ -174,16 +150,18 @@ class CajuPayWebhookController extends Controller
                         ->whereIn('status', [RefundRequest::STATUS_PENDING, RefundRequest::STATUS_PROCESSING])
                         ->update(['cajupay_refund_id' => $refundId]);
                 }
-                ProcessPaymentWebhook::dispatchSync(self::SLUG, $dispatchChargeId, 'order.refunded', 'refunded', array_merge(
-                    is_array($payload) ? $payload : [],
-                    ['webhook_source' => 'cajupay_hmac_verified', 'cajupay_refund_id' => $refundId]
-                ));
+                if ($dispatchId !== '') {
+                    ProcessPaymentWebhook::dispatchSync(self::SLUG, $dispatchId, 'order.refunded', 'refunded', array_merge(
+                        $webhookMeta,
+                        ['cajupay_refund_id' => $refundId]
+                    ));
+                }
                 break;
             case 'checkout.payment.disputed':
             case 'card.payment.disputed':
                 Log::info('CajuPayWebhook: disputa recebida', [
                     'order_id' => $order->id,
-                    'charge_id' => $dispatchChargeId,
+                    'payment_id' => $dispatchId,
                 ]);
                 break;
             default:
@@ -194,9 +172,68 @@ class CajuPayWebhookController extends Controller
         return response()->json(['received' => true]);
     }
 
+    private function isPaidEvent(string $eventType): bool
+    {
+        return in_array($eventType, [
+            'checkout.payment.paid',
+            'pix.payment.paid',
+            'card.payment.succeeded',
+        ], true);
+    }
+
     /**
-     * Parse "t=<unix>,v1=<hex>" tolerando espaços e ordem livre.
-     *
+     * @param  array<string, mixed>|null  $object
+     */
+    private function findOrderForWebhook(?string $sessionId, string $paymentId, ?array $object): ?Order
+    {
+        if (is_string($sessionId) && $sessionId !== '') {
+            $order = Order::where('gateway', self::SLUG)
+                ->where('gateway_id', $sessionId)
+                ->first();
+            if ($order) {
+                return $order;
+            }
+
+            $order = Order::where('gateway', self::SLUG)
+                ->where('metadata->cajupay_checkout_session_id', $sessionId)
+                ->first();
+            if ($order) {
+                return $order;
+            }
+        }
+
+        if ($paymentId !== '') {
+            $order = Order::where('gateway', self::SLUG)
+                ->where('gateway_id', $paymentId)
+                ->first();
+            if ($order) {
+                return $order;
+            }
+
+            $order = Order::where('gateway', self::SLUG)
+                ->where('metadata->cajupay_payment_id', $paymentId)
+                ->first();
+            if ($order) {
+                return $order;
+            }
+        }
+
+        if (is_array($object)) {
+            $clientRefundId = $object['client_refund_id'] ?? null;
+            if (is_string($clientRefundId) && $clientRefundId !== '') {
+                $refundRequest = RefundRequest::query()
+                    ->where('client_refund_id', $clientRefundId)
+                    ->first();
+                if ($refundRequest?->order) {
+                    return $refundRequest->order;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @return array<string, string>
      */
     private function parseSignatureHeader(string $header): array
@@ -212,6 +249,7 @@ class CajuPayWebhookController extends Controller
             }
             $out[strtolower(trim($kv[0]))] = trim($kv[1]);
         }
+
         return $out;
     }
 
@@ -255,33 +293,12 @@ class CajuPayWebhookController extends Controller
         return null;
     }
 
-    /**
-     * @param  array<string, mixed>|null  $object
-     */
-    private function pickChargeId(?array $object): ?string
-    {
-        if ($object === null) {
-            return null;
-        }
-        foreach (['cajupay_charge_id', 'charge_id', 'payment_id'] as $k) {
-            $v = $object[$k] ?? null;
-            if (is_string($v) && $v !== '') {
-                return $v;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Devolve o signing_secret que valida a assinatura, ou null se nenhuma credencial casar.
-     */
     private function resolveSigningSecret(string $rawBody, string $timestamp, string $expectedHex, ?int $preferTenantId): ?string
     {
         if ($expectedHex === '' || $timestamp === '') {
             return null;
         }
-        $payloadToSign = $timestamp . '.' . $rawBody;
+        $payloadToSign = $timestamp.'.'.$rawBody;
 
         $query = GatewayCredential::query()->where('gateway_slug', self::SLUG);
         if ($preferTenantId !== null) {
@@ -289,7 +306,6 @@ class CajuPayWebhookController extends Controller
         }
         $candidates = $query->get();
 
-        // Fallback: se não casou no tenant da order, procura em todos.
         if ($candidates->isEmpty() && $preferTenantId !== null) {
             $candidates = GatewayCredential::where('gateway_slug', self::SLUG)->get();
         }
@@ -301,10 +317,11 @@ class CajuPayWebhookController extends Controller
                 continue;
             }
             $computed = hash_hmac('sha256', $payloadToSign, $secret, false);
-            if (hash_equals(strtolower($computed), strtolower($expectedHex))) {
+            if (hash_equals(strtolower($computed), $expectedHex)) {
                 return $secret;
             }
         }
+
         return null;
     }
 }

@@ -10,6 +10,8 @@ use App\Events\OrderPending;
 use App\Events\PixGenerated;
 use App\Events\SubscriptionCreated;
 use App\Gateways\GatewayRegistry;
+use App\Plugins\PluginCheckoutExtensionRegistry;
+use App\Plugins\PluginHookBus;
 use App\Jobs\ProcessPaymentWebhook;
 use App\Models\Coupon;
 use App\Models\GatewayCredential;
@@ -451,6 +453,9 @@ class CheckoutController extends Controller
         foreach ($checkoutEventData->getArrayCopy() as $key => $value) {
             $payload[$key] = $value;
         }
+        $payload = PluginHookBus::applyFilters('checkout.payload', $payload, $product, $request);
+
+        $payload['plugin_checkout_extensions'] = PluginCheckoutExtensionRegistry::activeForProduct($product, 'standard');
 
         return Inertia::render('Checkout/Show', $payload)
             ->withViewData([
@@ -577,6 +582,7 @@ class CheckoutController extends Controller
             'utm_medium' => ['nullable', 'string', 'max:255'],
             'utm_campaign' => ['nullable', 'string', 'max:255'],
             'affiliate_ref' => ['nullable', 'string', 'max:32'],
+            'plugin_checkout_data' => ['nullable', 'string', 'max:65535'],
         ];
         $rules = array_merge($rules, $this->checkoutAttributionValidationRules());
         if ($request->input('payment_method') === 'card') {
@@ -620,15 +626,7 @@ class CheckoutController extends Controller
         $validated = $request->validate($rules);
         $validated = $this->applyPagarmeCompanyAddressToValidated($validated, $product, $paymentService);
 
-        $beforeProcess = new CheckoutBeforeProcess($product, $validated);
-        event($beforeProcess);
-        if ($beforeProcess->abort !== null && $beforeProcess->abort !== '') {
-            if ($request->expectsJson()) {
-                return response()->json(['message' => $beforeProcess->abort], 422);
-            }
-
-            return redirect()->back()->withErrors(['checkout' => $beforeProcess->abort]);
-        }
+        $pluginCheckoutData = PluginCheckoutExtensionRegistry::decodeCheckoutDataFromRequest($request);
 
         app(CheckoutAbuseGuard::class)->assertCanCreateCheckout($request, $product);
 
@@ -717,6 +715,21 @@ class CheckoutController extends Controller
         }
         $totalAmount = $amount + $bumpAmountTotal;
 
+        $beforeProcess = new CheckoutBeforeProcess($product, $validated, null, $pluginCheckoutData);
+        PluginCheckoutExtensionRegistry::invokeProcessHandlers($product, $validated, $pluginCheckoutData, $beforeProcess);
+        PluginHookBus::doAction('checkout.before_process', $beforeProcess, $product, $validated, $pluginCheckoutData);
+        event($beforeProcess);
+        if ($beforeProcess->abort !== null && $beforeProcess->abort !== '') {
+            if ($request->expectsJson()) {
+                return response()->json(['message' => $beforeProcess->abort], 422);
+            }
+
+            return redirect()->back()->withErrors(['checkout' => $beforeProcess->abort]);
+        }
+        if ($beforeProcess->amountAdjustment > 0) {
+            $totalAmount += $beforeProcess->amountAdjustment;
+        }
+
         $periodStart = null;
         $periodEnd = null;
         if ($plan) {
@@ -785,6 +798,9 @@ class CheckoutController extends Controller
             $orderMetadata,
             \App\Support\AffiliateAttribution::metadataAttributes($product, $affiliateRefForOrder)
         );
+        if ($beforeProcess->orderMetadata !== []) {
+            $orderMetadata = array_merge($orderMetadata, $beforeProcess->orderMetadata);
+        }
 
         $orderCountryCode = $this->resolveBillingCountryForCheckout($request, $validated);
 

@@ -26,7 +26,78 @@ const testing = ref(false);
 const testMessage = ref(null);
 const testSuccess = ref(null);
 const credentialValues = ref({});
+const secretMaskPlaceholders = ref({});
 const certificateFile = ref(null);
+
+const SECRET_FIELD_KEYS = ['secret_key', 'webhook_secret', 'webhook_signing_secret'];
+
+function isSecretCredentialField(field) {
+    const key = field?.key;
+    const type = field?.type || 'text';
+    return type === 'password' || (key && SECRET_FIELD_KEYS.includes(key));
+}
+
+function isMaskPlaceholder(key, value) {
+    const mask = secretMaskPlaceholders.value[key];
+    return !!mask && String(value ?? '').trim() === mask;
+}
+
+function hasSecretValue(key, value) {
+    const trimmed = String(value ?? '').trim();
+    return trimmed !== '' && (isMaskPlaceholder(key, trimmed) || !trimmed.includes('••••'));
+}
+
+function resolveSecretForSubmit(key, value) {
+    if (isMaskPlaceholder(key, value)) {
+        return '';
+    }
+    return value != null ? String(value).trim() : '';
+}
+
+function secretInputType(field, key) {
+    if (!isSecretCredentialField(field)) {
+        return field.type === 'password' ? 'password' : 'text';
+    }
+    if (isMaskPlaceholder(key, credentialValues.value[key])) {
+        return 'text';
+    }
+    return 'password';
+}
+
+function onSecretFocus(key) {
+    if (isMaskPlaceholder(key, credentialValues.value[key])) {
+        credentialValues.value[key] = '';
+    }
+}
+
+function onSecretBlur(key) {
+    const v = credentialValues.value[key];
+    if ((v == null || String(v).trim() === '') && secretMaskPlaceholders.value[key]) {
+        credentialValues.value[key] = secretMaskPlaceholders.value[key];
+    }
+}
+
+function buildCredentialInitial(keys, saved) {
+    const initial = {};
+    const masks = {};
+    for (const k of keys) {
+        if ((k.type || 'text') === 'file') continue;
+        const key = k.key;
+        if (key == null) continue;
+        const v = saved[key];
+        if (k.type === 'boolean') {
+            initial[key] = v === true || v === '1' || v === 'true';
+        } else {
+            const str = v != null && v !== '' ? String(v) : '';
+            initial[key] = str;
+            if (isSecretCredentialField(k) && str.includes('••••')) {
+                masks[key] = str;
+            }
+        }
+    }
+    secretMaskPlaceholders.value = masks;
+    return initial;
+}
 const webhookCopied = ref(false);
 const webhookCopiedSecondary = ref(false);
 const disconnecting = ref(false);
@@ -38,6 +109,8 @@ const fees = ref({
 const savingFees = ref(false);
 const feesMessage = ref('');
 const feesPanelOpen = ref(false);
+const advancedPanelOpen = ref(false);
+const rotatingWebhook = ref(false);
 
 const feeMethodLabels = {
     pix: 'PIX',
@@ -46,6 +119,61 @@ const feeMethodLabels = {
 };
 
 const isCajuPay = computed(() => (props.gatewaySlug || gateway.value?.slug || '').toLowerCase() === 'cajupay');
+
+const standardCredentialFields = computed(() => {
+    const keys = gateway.value?.credential_keys || [];
+    return keys.filter((k) => !k.advanced);
+});
+
+const advancedCredentialFields = computed(() => {
+    const keys = gateway.value?.credential_keys || [];
+    return keys.filter((k) => k.advanced);
+});
+
+const hasAdvancedCredentialFields = computed(() => advancedCredentialFields.value.length > 0);
+
+const cajupayWebhookNeedsAttention = computed(() => {
+    if (!isCajuPay.value || !gateway.value) return false;
+    const status = gateway.value.webhook_setup_status;
+    if (!status || typeof status !== 'object') return false;
+    return status.has_enabled_endpoint === false || status.subscribes_checkout_events === false;
+});
+
+async function reloadGateway(slug) {
+    const { data } = await axios.get(
+        `/configuracoes/gateways/${encodeURIComponent(slug)}`,
+        { params: { t: Date.now() } }
+    );
+    gateway.value = data;
+    const keys = data.credential_keys || [];
+    const saved = data.credential_values || {};
+    credentialValues.value = { ...buildCredentialInitial(keys, saved) };
+}
+
+async function rotateWebhookSecret() {
+    const url = gateway.value?.webhook_rotate_url;
+    if (!url) return;
+    rotatingWebhook.value = true;
+    testMessage.value = null;
+    try {
+        const { data } = await axios.post(
+            url,
+            {},
+            { headers: { 'X-XSRF-TOKEN': getCsrfToken(), Accept: 'application/json' } }
+        );
+        testSuccess.value = data.success;
+        const parts = [data.message, data.webhook_warning].filter(Boolean);
+        testMessage.value = parts.join(' ');
+        if (gateway.value?.slug) {
+            await reloadGateway(gateway.value.slug);
+        }
+    } catch (err) {
+        testSuccess.value = false;
+        testMessage.value = err.response?.data?.message || 'Erro ao rotacionar token do webhook.';
+    } finally {
+        rotatingWebhook.value = false;
+    }
+}
 
 async function loadFees(slug) {
     try {
@@ -103,10 +231,12 @@ watch(
             loading.value = true;
             testMessage.value = null;
             feesPanelOpen.value = false;
+            advancedPanelOpen.value = false;
             feesMessage.value = '';
             webhookCopied.value = false;
             webhookCopiedSecondary.value = false;
             credentialValues.value = {};
+            secretMaskPlaceholders.value = {};
             try {
                 const { data } = await axios.get(
                     `/configuracoes/gateways/${encodeURIComponent(slug)}`,
@@ -116,19 +246,7 @@ watch(
                 await loadFees(slug);
                 const keys = data.credential_keys || [];
                 const saved = data.credential_values || {};
-                const initial = {};
-                for (const k of keys) {
-                    if ((k.type || 'text') === 'file') continue;
-                    const key = k.key;
-                    if (key == null) continue;
-                    const v = saved[key];
-                    if (k.type === 'boolean') {
-                        initial[key] = v === true || v === '1' || v === 'true';
-                    } else {
-                        initial[key] = v != null && v !== '' ? String(v) : '';
-                    }
-                }
-                credentialValues.value = { ...initial };
+                credentialValues.value = { ...buildCredentialInitial(keys, saved) };
                 certificateFile.value = null;
             } catch {
                 gateway.value = null;
@@ -153,6 +271,11 @@ function buildTestPayload() {
         const v = credentialValues.value[k.key];
         if (k.type === 'boolean') {
             payload[k.key] = v === true || v === '1' || v === 'true';
+        } else if (isSecretCredentialField(k)) {
+            const resolved = resolveSecretForSubmit(k.key, v);
+            if (resolved !== '') {
+                payload[k.key] = resolved;
+            }
         } else if (v != null && String(v).trim() !== '') {
             payload[k.key] = String(v).trim();
         }
@@ -176,7 +299,10 @@ async function testConnection() {
             continue;
         }
         const v = credentialValues.value[k.key];
-        if (v == null || String(v).trim() === '') {
+        const satisfied = isSecretCredentialField(k)
+            ? hasSecretValue(k.key, v)
+            : (v != null && String(v).trim() !== '');
+        if (!satisfied) {
             testMessage.value = 'Preencha todas as credenciais obrigatórias para testar.';
             testSuccess.value = false;
             return;
@@ -223,6 +349,8 @@ async function save() {
             const v = credentialValues.value[k.key];
             if (k.type === 'boolean') {
                 payload[k.key] = v === true || v === '1' || v === 'true';
+            } else if (isSecretCredentialField(k)) {
+                payload[k.key] = resolveSecretForSubmit(k.key, v);
             } else {
                 payload[k.key] = v != null ? String(v).trim() : '';
             }
@@ -246,7 +374,11 @@ async function save() {
 
         certificateFile.value = null;
         testSuccess.value = true;
-        testMessage.value = data?.message || 'Credenciais salvas.';
+        const saveParts = [data?.message || 'Credenciais salvas.', data?.webhook_warning].filter(Boolean);
+        testMessage.value = saveParts.join(' ');
+        if (gateway.value?.slug) {
+            await reloadGateway(gateway.value.slug);
+        }
         emit('saved');
         setTimeout(() => {
             emit('close');
@@ -375,17 +507,23 @@ const canTestConnection = computed(() => {
                         </h3>
                         <template v-if="gateway.slug === 'cajupay'">
                             <p class="mb-3 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                                No painel CajuPay, em <strong class="font-medium text-zinc-800 dark:text-zinc-200">Webhooks</strong>, cadastre uma das URLs abaixo e os eventos de checkout/cartão.
-                                Copie o <strong class="font-medium text-zinc-800 dark:text-zinc-200">token</strong> (<code class="rounded bg-zinc-200 px-0.5 text-[11px] dark:bg-zinc-700">cwhsec_…</code>) exibido uma vez e cole no campo
-                                <strong class="font-medium text-zinc-800 dark:text-zinc-200">Token do webhook</strong> em Credenciais. O “Testar conexão” pode registrar a URL principal na API automaticamente; se você já cadastrou manualmente no painel CajuPay, basta salvar o token.
+                                Ao salvar as chaves de API, o Getfy registra o webhook na CajuPay automaticamente
+                                (eventos <code class="rounded bg-zinc-200 px-0.5 text-[11px] dark:bg-zinc-700">checkout.payment.*</code>
+                                e <code class="rounded bg-zinc-200 px-0.5 text-[11px] dark:bg-zinc-700">pix.payment.*</code>).
+                                Não é necessário configurar manualmente no painel CajuPay.
                             </p>
-                            <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                                Eventos sugeridos
-                            </p>
-                            <p class="mb-3 font-mono text-[10px] leading-snug text-zinc-600 dark:text-zinc-400">
-                                checkout.payment.paid, checkout.payment.failed, checkout.payment.refunded, checkout.payment.disputed
-                                <span class="text-zinc-500">e, se disponíveis,</span>
-                                card.payment.succeeded, card.payment.failed, card.payment.refunded, card.payment.disputed
+                            <div
+                                v-if="gateway.webhook_auto_configured"
+                                class="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 dark:border-emerald-800 dark:bg-emerald-950/40"
+                            >
+                                <Check class="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                                <span class="text-xs font-medium text-emerald-800 dark:text-emerald-200">Webhook já configurado</span>
+                            </div>
+                            <p
+                                v-if="cajupayWebhookNeedsAttention"
+                                class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                            >
+                                A CajuPay indica que o webhook pode estar incompleto. Salve as credenciais novamente ou use “Rotacionar token” na configuração avançada.
                             </p>
                         </template>
                         <p v-else class="mb-2 text-xs text-zinc-600 dark:text-zinc-400">
@@ -439,7 +577,7 @@ const canTestConnection = computed(() => {
                     </h3>
                     <div v-if="hasManualCredentialFields" class="space-y-4">
                         <div
-                            v-for="field in (gateway.credential_keys || [])"
+                            v-for="field in standardCredentialFields"
                             :key="field.key"
                         >
                             <label
@@ -483,29 +621,75 @@ const canTestConnection = computed(() => {
                             <input
                                 v-else
                                 v-model="credentialValues[field.key]"
-                                :type="field.type === 'password' ? 'password' : 'text'"
-                                :placeholder="field.label"
-                                :class="inputClass"
+                                :type="secretInputType(field, field.key)"
+                                :placeholder="isSecretCredentialField(field) && secretMaskPlaceholders[field.key] ? 'Clique para substituir' : field.label"
+                                :class="[
+                                    inputClass,
+                                    isMaskPlaceholder(field.key, credentialValues[field.key]) ? 'font-mono text-sm tracking-wide' : '',
+                                ]"
                                 autocomplete="off"
+                                @focus="() => { if (isSecretCredentialField(field)) onSecretFocus(field.key); }"
+                                @blur="() => { if (isSecretCredentialField(field)) onSecretBlur(field.key); }"
                             />
-                            <p
-                                v-if="field.key === 'webhook_signing_secret' && gateway.slug === 'cajupay' && gateway.webhook_signing_secret_set"
-                                class="mt-1.5 text-xs text-emerald-700 dark:text-emerald-300"
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="hasAdvancedCredentialFields"
+                        class="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-700"
+                    >
+                        <button
+                            type="button"
+                            class="flex w-full items-center justify-between gap-3 text-left"
+                            :aria-expanded="advancedPanelOpen"
+                            @click="advancedPanelOpen = !advancedPanelOpen"
+                        >
+                            <h3 class="text-sm font-semibold text-zinc-900 dark:text-white">
+                                Configuração avançada
+                            </h3>
+                            <ChevronUp v-if="advancedPanelOpen" class="h-5 w-5 shrink-0 text-zinc-400" />
+                            <ChevronDown v-else class="h-5 w-5 shrink-0 text-zinc-400" />
+                        </button>
+                        <div v-show="advancedPanelOpen" class="mt-3 space-y-4">
+                            <div
+                                v-for="field in advancedCredentialFields"
+                                :key="field.key"
                             >
-                                Token já salvo neste servidor. Deixe o campo em branco para manter; cole um novo valor apenas se tiver rotacionado o secret no painel CajuPay.
-                            </p>
-                            <p
-                                v-if="field.key === 'secret_key' && gateway.slug === 'spacepag' && gateway.spacepag_secret_key_set"
-                                class="mt-1.5 text-xs text-emerald-700 dark:text-emerald-300"
+                                <label
+                                    class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300"
+                                >
+                                    {{ field.label }}
+                                    <span v-if="field.optional" class="ml-1 text-xs font-normal text-zinc-500">(opcional)</span>
+                                </label>
+                                <p
+                                    v-if="field.hint"
+                                    class="mb-2 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400"
+                                >
+                                    {{ field.hint }}
+                                </p>
+                                <input
+                                    v-model="credentialValues[field.key]"
+                                    :type="secretInputType(field, field.key)"
+                                    :placeholder="secretMaskPlaceholders[field.key] ? 'Clique para substituir' : (field.key === 'webhook_signing_secret' ? 'Configurado automaticamente ao salvar' : field.label)"
+                                    :class="[
+                                        inputClass,
+                                        isMaskPlaceholder(field.key, credentialValues[field.key]) ? 'font-mono text-sm tracking-wide' : '',
+                                    ]"
+                                    autocomplete="off"
+                                    @focus="onSecretFocus(field.key)"
+                                    @blur="onSecretBlur(field.key)"
+                                />
+                            </div>
+                            <Button
+                                v-if="isCajuPay && gateway.webhook_rotate_url"
+                                type="button"
+                                variant="outline"
+                                class="w-full"
+                                :disabled="rotatingWebhook"
+                                @click="rotateWebhookSecret"
                             >
-                                Chave privada já salva. Deixe em branco para manter.
-                            </p>
-                            <p
-                                v-if="field.key === 'webhook_secret' && gateway.slug === 'spacepag' && gateway.webhook_secret_set"
-                                class="mt-1.5 text-xs text-emerald-700 dark:text-emerald-300"
-                            >
-                                Secret do webhook já salvo. Deixe em branco para manter.
-                            </p>
+                                {{ rotatingWebhook ? 'Rotacionando…' : 'Rotacionar token do webhook' }}
+                            </Button>
                         </div>
                     </div>
 

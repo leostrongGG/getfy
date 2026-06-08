@@ -6,6 +6,8 @@ import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import { whatsappUrlForPhone } from '@/lib/utils';
 import VendasTabs from '@/components/vendas/VendasTabs.vue';
 import VendaDetailSidebar from '@/components/vendas/VendaDetailSidebar.vue';
+import PluginRuntimeMount from '@/components/plugins/PluginRuntimeMount.vue';
+import PluginRenderZone from '@/components/plugins/PluginRenderZone.vue';
 import {
     Eye,
     EyeOff,
@@ -475,6 +477,7 @@ function openProofExport() {
 <template>
     <div class="space-y-6">
         <VendasTabs />
+        <PluginRenderZone zone="vendas.index.after_toolbar" />
 
         <!-- Cards de métricas -->
         <div class="space-y-3">
@@ -1040,6 +1043,7 @@ function openProofExport() {
         <VendaDetailSidebar
             :open="sidebarOpen"
             :venda="selectedVenda"
+            :plugin_order_detail_panels="plugin_order_detail_panels"
             @close="closeSidebar"
         />
 
@@ -1091,8 +1095,15 @@ function openProofExport() {
                     {{ resendingId === openMenuId ? 'Enviando...' : 'Reenviar e-mail de compra' }}
                 </button>
                 <template v-for="fp in plugin_fulfillment_providers" :key="`fp-${fp.plugin_slug}-${fp.id}`">
+                    <div
+                        v-if="fp.ui_mode === 'runtime' && menuVenda.status === 'completed'"
+                        class="px-3 py-2"
+                        @click="closeMenu"
+                    >
+                        <PluginRuntimeMount :item="fp" :context="{ order: menuVenda }" />
+                    </div>
                     <a
-                        v-if="(fp.href || fp.route) && menuVenda.status === 'completed'"
+                        v-else-if="(fp.href || fp.route) && menuVenda.status === 'completed'"
                         :href="pluginActionHref(fp, menuVenda)"
                         class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
                         @click="closeMenu"
@@ -1101,8 +1112,15 @@ function openProofExport() {
                     </a>
                 </template>
                 <template v-for="act in plugin_vendas_row_actions" :key="`act-${act.plugin_slug}-${act.id}`">
+                    <div
+                        v-if="act.ui_mode === 'runtime'"
+                        class="px-3 py-2"
+                        @click="closeMenu"
+                    >
+                        <PluginRuntimeMount :item="act" :context="{ order: menuVenda }" />
+                    </div>
                     <a
-                        v-if="act.href || act.route"
+                        v-else-if="act.href || act.route"
                         :href="pluginActionHref(act, menuVenda)"
                         class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
                         @click="closeMenu"

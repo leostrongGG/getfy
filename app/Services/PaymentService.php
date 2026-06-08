@@ -78,18 +78,26 @@ class PaymentService
                     $splitId
                 );
                 $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
+                $metadata = is_array($order->metadata) ? $order->metadata : [];
                 $orderUpdate = [
                     'gateway' => $gatewaySlug,
                     'gateway_id' => $result['transaction_id'] ?? null,
                 ];
+                if ($gatewaySlug === 'cajupay' && ! empty($result['transaction_id'])) {
+                    $metadata['cajupay_payment_id'] = $result['transaction_id'];
+                    if (empty($metadata['checkout_payment_method'])) {
+                        $metadata['checkout_payment_method'] = 'pix';
+                    }
+                }
                 if ($splitId && $splitContext) {
-                    $metadata = is_array($order->metadata) ? $order->metadata : [];
                     $metadata['cajupay_split_id'] = $splitId;
                     $metadata['cajupay_split_beneficiary_role'] = $splitContext['beneficiary_role'];
                     $metadata['cajupay_split_beneficiary_id'] = $splitContext['beneficiary_id'];
                     if (! empty($splitContext['multiple_coproducer_splits'])) {
                         $metadata['cajupay_split_multiple_coproducers'] = true;
                     }
+                }
+                if ($metadata !== (is_array($order->metadata) ? $order->metadata : [])) {
                     $orderUpdate['metadata'] = $metadata;
                 }
                 $order->update($orderUpdate);

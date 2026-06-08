@@ -1,10 +1,13 @@
 <script setup>
 import { ref, computed } from 'vue';
 import { X, ExternalLink } from 'lucide-vue-next';
+import PluginSlotHost from '@/components/plugins/PluginSlotHost.vue';
+import PluginRenderZone from '@/components/plugins/PluginRenderZone.vue';
 
 const props = defineProps({
     open: { type: Boolean, default: false },
     venda: { type: Object, default: null },
+    plugin_order_detail_panels: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits(['close']);
@@ -161,6 +164,20 @@ function itemLabel(item) {
                         >
                             Cliente
                         </button>
+                        <button
+                            v-for="panel in plugin_order_detail_panels"
+                            :key="panel.id || panel.plugin_slug"
+                            type="button"
+                            :class="[
+                                'rounded-lg px-4 py-2.5 text-sm font-medium transition-colors',
+                                activeTab === `plugin-${panel.id}`
+                                    ? 'bg-white text-[var(--color-primary)] shadow-sm dark:bg-zinc-800 dark:text-[var(--color-primary)]'
+                                    : 'text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200',
+                            ]"
+                            @click="activeTab = `plugin-${panel.id}`"
+                        >
+                            {{ panel.label || panel.id }}
+                        </button>
                     </nav>
 
                     <div class="flex-1 overflow-y-auto p-5">
@@ -294,6 +311,22 @@ function itemLabel(item) {
                                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Data de criação</p>
                                 <p class="text-sm text-zinc-900 dark:text-white">{{ formatDate(venda.created_at) }}</p>
                             </div>
+                        </div>
+
+                        <div
+                            v-for="panel in plugin_order_detail_panels"
+                            :key="`panel-${panel.id}`"
+                            v-show="activeTab === `plugin-${panel.id}`"
+                        >
+                            <PluginSlotHost
+                                layout="stack"
+                                :items="[panel]"
+                                :context="{ venda, order: venda }"
+                            />
+                            <PluginRenderZone
+                                zone="vendas.detail.after_panel"
+                                :context="{ venda, order: venda }"
+                            />
                         </div>
 
                         <!-- Aba Cliente -->

@@ -29,4 +29,9 @@ return [
     ],
 
     'stale_pending_hours' => (int) env('CHECKOUT_STALE_PENDING_HOURS', 24),
+
+    'flood' => [
+        'pix_attempts_per_minute' => (int) env('CHECKOUT_FLOOD_PIX_ATTEMPTS_PER_MINUTE', 2),
+        'reuse_lookback_minutes' => (int) env('CHECKOUT_FLOOD_PIX_REUSE_LOOKBACK_MINUTES', 120),
+    ],
 ];
