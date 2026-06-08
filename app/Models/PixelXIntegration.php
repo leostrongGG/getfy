@@ -51,8 +51,8 @@ class PixelXIntegration extends Model
             return false;
         }
 
-        // config('webhook_events.events') maps FQCN => slug
-        $slug = config('webhook_events.events')[$eventClass] ?? null;
+        // config('webhook_events.event_slugs') maps FQCN => slug
+        $slug = config('webhook_events.event_slugs')[$eventClass] ?? null;
         if ($slug === null) {
             return false;
         }
