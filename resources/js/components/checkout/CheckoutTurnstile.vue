@@ -11,6 +11,43 @@ const emit = defineEmits(['update:modelValue']);
 const containerRef = ref(null);
 let widgetId = null;
 let scriptLoading = null;
+let pendingResolve = null;
+let pendingReject = null;
+let pendingTimer = null;
+
+function clearPending() {
+    if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+    }
+    pendingResolve = null;
+    pendingReject = null;
+}
+
+function resolvePending(token) {
+    if (!pendingResolve) {
+        return;
+    }
+    const resolve = pendingResolve;
+    clearPending();
+    resolve(token);
+}
+
+function rejectPending(error) {
+    if (!pendingReject) {
+        return;
+    }
+    const reject = pendingReject;
+    clearPending();
+    reject(error);
+}
+
+function onTurnstileToken(token) {
+    emit('update:modelValue', token);
+    if (token) {
+        resolvePending(token);
+    }
+}
 
 function loadTurnstileScript() {
     if (typeof window === 'undefined') return Promise.resolve();
@@ -48,11 +85,38 @@ function renderWidget() {
     }
     widgetId = window.turnstile.render(containerRef.value, {
         sitekey: props.siteKey,
-        appearance: 'interaction-only',
-        size: 'flexible',
-        callback: (token) => emit('update:modelValue', token),
+        size: 'invisible',
+        callback: (token) => onTurnstileToken(token),
         'expired-callback': () => emit('update:modelValue', ''),
-        'error-callback': () => emit('update:modelValue', ''),
+        'error-callback': () => {
+            emit('update:modelValue', '');
+            rejectPending(new Error('turnstile_error'));
+        },
+    });
+}
+
+async function obtainToken(timeoutMs = 15000) {
+    await loadTurnstileScript();
+    if (!props.siteKey) {
+        throw new Error('turnstile_no_site_key');
+    }
+    if (String(props.modelValue || '').trim() !== '') {
+        return props.modelValue;
+    }
+    if (widgetId === null) {
+        renderWidget();
+    }
+    return new Promise((resolve, reject) => {
+        pendingResolve = resolve;
+        pendingReject = reject;
+        pendingTimer = setTimeout(() => {
+            rejectPending(new Error('turnstile_timeout'));
+        }, timeoutMs);
+        try {
+            window.turnstile.reset(widgetId);
+        } catch (_) {
+            renderWidget();
+        }
     });
 }
 
@@ -75,6 +139,7 @@ watch(() => props.siteKey, async () => {
 });
 
 onBeforeUnmount(() => {
+    clearPending();
     if (widgetId !== null && window.turnstile) {
         try {
             window.turnstile.remove(widgetId);
@@ -85,20 +150,21 @@ onBeforeUnmount(() => {
 });
 
 function reset() {
+    clearPending();
     if (widgetId !== null && window.turnstile) {
         window.turnstile.reset(widgetId);
     }
     emit('update:modelValue', '');
 }
 
-defineExpose({ reset });
+defineExpose({ reset, obtainToken });
 </script>
 
 <template>
     <div
         ref="containerRef"
-        class="min-h-[65px] w-full"
+        class="pointer-events-none absolute -left-[9999px] h-0 w-0 overflow-hidden opacity-0"
         data-checkout="turnstile"
-        aria-label="Verificação de segurança"
+        aria-hidden="true"
     />
 </template>

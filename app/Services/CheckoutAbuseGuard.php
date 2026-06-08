@@ -38,20 +38,31 @@ class CheckoutAbuseGuard
     }
 
     /**
-     * @return array{requires_captcha: bool, turnstile_site_key: ?string}
+     * @return array{requires_captcha: bool, turnstile_site_key: ?string, turnstile: array{enabled: bool, site_key: string, mode: string}}
      */
     public function securityPropsForRequest(Request $request, ?Product $product = null): array
     {
         if (! $this->isEnabled()) {
-            return ['requires_captcha' => false, 'turnstile_site_key' => null];
+            return [
+                'requires_captcha' => false,
+                'turnstile_site_key' => null,
+                'turnstile' => [
+                    'enabled' => false,
+                    'site_key' => '',
+                    'mode' => CheckoutTurnstileSettings::MODE_DISABLED,
+                ],
+            ];
         }
 
         $requires = $this->requiresCaptcha($request, $product);
         $siteKey = $this->turnstileSiteKey();
+        $configured = $this->turnstile->isConfigured();
+        $turnstile = $this->turnstilePublicConfig($siteKey, $configured);
 
         return [
-            'requires_captcha' => $requires && $this->turnstile->isConfigured(),
-            'turnstile_site_key' => ($requires && $siteKey !== '') ? $siteKey : null,
+            'requires_captcha' => $requires && $configured,
+            'turnstile_site_key' => ($requires && $siteKey !== '') ? $siteKey : ($turnstile['enabled'] ? $turnstile['site_key'] : null),
+            'turnstile' => $turnstile,
         ];
     }
 
@@ -258,6 +269,35 @@ class CheckoutAbuseGuard
     private function turnstileSiteKey(): string
     {
         return CheckoutTurnstileSettings::siteKeyForCheckout();
+    }
+
+    /**
+     * @return array{enabled: bool, site_key: string, mode: string}
+     */
+    private function turnstilePublicConfig(string $siteKey, bool $configured): array
+    {
+        $panelConfig = CheckoutTurnstileSettings::publicConfig();
+        if ($panelConfig['enabled']) {
+            return $panelConfig;
+        }
+
+        if (! $configured || $siteKey === '') {
+            return [
+                'enabled' => false,
+                'site_key' => '',
+                'mode' => CheckoutTurnstileSettings::MODE_DISABLED,
+            ];
+        }
+
+        $envMode = strtolower((string) config('checkout_security.captcha.mode', 'adaptive'));
+
+        return [
+            'enabled' => true,
+            'site_key' => $siteKey,
+            'mode' => $envMode === 'always'
+                ? CheckoutTurnstileSettings::MODE_ALL_PAYMENTS
+                : CheckoutTurnstileSettings::MODE_PIX_BOLETO,
+        ];
     }
 
     private function attemptCacheKey(string $type, string $value, ?string $productId): string

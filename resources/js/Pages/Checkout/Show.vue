@@ -76,7 +76,7 @@ const props = defineProps({
     subscription_plan: { type: Object, default: null },
     /** Definido no servidor quando a URL traz `?preview=1` (preview no iframe do Builder). */
     checkout_builder_preview: { type: Boolean, default: false },
-    checkout_security: { type: Object, default: () => ({ requires_captcha: false, turnstile_site_key: null }) },
+    checkout_security: { type: Object, default: () => ({ requires_captcha: false, turnstile_site_key: null, turnstile: { enabled: false, site_key: '', mode: 'pix_boleto' } }) },
     plugin_checkout_extensions: { type: Array, default: () => [] },
 });
 

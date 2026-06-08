@@ -67,6 +67,8 @@ class CheckoutAbuseTest extends TestCase
         $props = $guard->securityPropsForRequest($request, $product);
         $this->assertTrue($props['requires_captcha']);
         $this->assertSame('test-site-key', $props['turnstile_site_key']);
+        $this->assertTrue($props['turnstile']['enabled']);
+        $this->assertSame('test-site-key', $props['turnstile']['site_key']);
     }
 
     public function test_stale_pending_orders_command_cancels_old_orders_without_gateway(): void
@@ -114,6 +116,9 @@ class CheckoutAbuseTest extends TestCase
 
         $this->assertTrue($props['requires_captcha']);
         $this->assertSame('panel-site-key', $props['turnstile_site_key']);
+        $this->assertTrue($props['turnstile']['enabled']);
+        $this->assertSame('panel-site-key', $props['turnstile']['site_key']);
+        $this->assertSame(CheckoutTurnstileSettings::MODE_PIX_BOLETO, $props['turnstile']['mode']);
         $this->assertTrue(CheckoutTurnstileSettings::requiresTokenForPaymentMethod('pix'));
     }
 
