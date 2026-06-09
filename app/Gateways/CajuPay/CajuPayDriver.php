@@ -591,7 +591,7 @@ class CajuPayDriver implements GatewayDriver
                 ->post('/api/webhooks/endpoints/register', [
                     'url' => $url,
                     'description' => $desc,
-                    'event_types' => ['checkout.payment.*', 'pix.payment.*'],
+                    'event_types' => ['checkout.payment.*', 'pix.payment.*', 'payout.*'],
                     'rotate_if_exists' => $rotateIfExists,
                 ]);
         } catch (\Throwable $e) {
@@ -1154,15 +1154,10 @@ class CajuPayDriver implements GatewayDriver
      */
     public function normalizePayoutStatus(array $response): string
     {
-        $status = strtolower((string) (
-            $response['status']
-            ?? $response['data']['status']
-            ?? $response['payout_status']
-            ?? ''
-        ));
+        $status = strtolower($this->extractPayoutStatus($response));
 
         return match (true) {
-            in_array($status, ['paid', 'completed', 'success', 'succeeded'], true) => 'paid',
+            in_array($status, ['paid', 'completed', 'success', 'succeeded', 'approved', 'done', 'settled'], true) => 'paid',
             in_array($status, ['failed', 'error', 'rejected'], true) => 'failed',
             in_array($status, ['cancelled', 'canceled'], true) => 'cancelled',
             in_array($status, ['pending', 'processing', 'in_transit', 'in_progress'], true) => 'pending',
@@ -1170,11 +1165,46 @@ class CajuPayDriver implements GatewayDriver
         };
     }
 
+    /**
+     * @param  array<string, mixed>  $response
+     */
+    public function extractPayoutStatus(array $response): string
+    {
+        $candidates = [
+            $response['status'] ?? null,
+            $response['payout_status'] ?? null,
+            is_array($response['data'] ?? null) ? ($response['data']['status'] ?? $response['data']['payout_status'] ?? null) : null,
+            is_array($response['data']['object'] ?? null) ? ($response['data']['object']['status'] ?? null) : null,
+            is_array($response['payout'] ?? null) ? ($response['payout']['status'] ?? null) : null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && $candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return '';
+    }
+
     public function extractPayoutId(array $response): ?string
     {
-        $id = $response['id'] ?? $response['data']['id'] ?? $response['payout_id'] ?? null;
+        $candidates = [
+            $response['id'] ?? null,
+            $response['payout_id'] ?? null,
+            $response['cajupay_payout_id'] ?? null,
+            is_array($response['data'] ?? null) ? ($response['data']['id'] ?? $response['data']['payout_id'] ?? null) : null,
+            is_array($response['data']['object'] ?? null) ? ($response['data']['object']['id'] ?? null) : null,
+            is_array($response['payout'] ?? null) ? ($response['payout']['id'] ?? null) : null,
+        ];
 
-        return is_string($id) && $id !== '' ? $id : null;
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && $candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     /**

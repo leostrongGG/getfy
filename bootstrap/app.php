@@ -153,7 +153,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('payments:reconcile-pending --limit=200 --days=45')->everyMinute();
         $schedule->command('orders:cancel-stale-pending')->hourly();
         $schedule->command('commissions:release')->hourly();
-        $schedule->command('payouts:reconcile')->everyTenMinutes();
+        $schedule->command('payouts:reconcile')->everyMinute();
         $schedule->command('coproducers:expire-invites')->daily();
         $schedule->command('schedule:heartbeat')->everyMinute();
         $schedule->job(new \App\Jobs\QueueHeartbeatJob)->everyMinute();

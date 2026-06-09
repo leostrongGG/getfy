@@ -474,6 +474,7 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
 
         Route::get('/produtos/{produto}/affiliate-program', [\App\Http\Controllers\ProductAffiliateProgramController::class, 'show'])->name('produtos.affiliate-program.show');
         Route::put('/produtos/{produto}/affiliate-program', [\App\Http\Controllers\ProductAffiliateProgramController::class, 'updateProgram'])->name('produtos.affiliate-program.update');
+        Route::post('/produtos/{produto}/affiliate-program', [\App\Http\Controllers\ProductAffiliateProgramController::class, 'updateProgram'])->name('produtos.affiliate-program.update.post');
         Route::put('/produtos/{produto}/affiliates/{affiliate}', [\App\Http\Controllers\ProductAffiliateProgramController::class, 'updateAffiliate'])->name('produtos.affiliates.update');
         Route::delete('/produtos/{produto}/affiliates/{affiliate}', [\App\Http\Controllers\ProductAffiliateProgramController::class, 'destroyAffiliate'])->name('produtos.affiliates.destroy');
 
