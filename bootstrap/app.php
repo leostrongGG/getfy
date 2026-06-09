@@ -83,14 +83,20 @@ return Application::configure(basePath: dirname(__DIR__))
             $isCheckout = str_starts_with($path, 'checkout')
                 || str_starts_with($path, 'api-checkout')
                 || $path === 'renovar';
-            if (! $isCheckout) {
+            $isAuthAccess = $path === 'login'
+                || $path === 'access'
+                || (bool) preg_match('#^m/[^/]+/(login|access)$#', $path);
+            if (! $isCheckout && ! $isAuthAccess) {
                 return null;
             }
 
             $retryAfter = $e->getHeaders()['Retry-After'] ?? null;
+            $defaultMessage = $isAuthAccess
+                ? 'Muitas tentativas. Aguarde 1 minuto e tente novamente, ou use o link do e-mail de compra.'
+                : 'Aguarde um momento antes de tentar novamente.';
             $message = $e->getMessage() !== '' && $e->getMessage() !== 'Too Many Attempts.'
                 ? $e->getMessage()
-                : 'Aguarde um momento antes de tentar novamente.';
+                : $defaultMessage;
 
             if ($request->expectsJson()) {
                 return response()->json([
