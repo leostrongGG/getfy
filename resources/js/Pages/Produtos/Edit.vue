@@ -345,7 +345,7 @@ const priceNum = computed(() => parseFloat(form.price) || 0);
 const priceEur = computed(() => (priceNum.value * (props.exchange_rates.brl_eur ?? 0.16)).toFixed(2));
 const priceUsd = computed(() => (priceNum.value * (props.exchange_rates.brl_usd ?? 0.18)).toFixed(2));
 
-/** Valor mínimo por parcela (R$) para Efí/Asaas — parcelas abaixo disso costumam ser recusadas. */
+/** Valor mínimo por parcela (R$) para Efí, Asaas e Pagar.me — parcelas abaixo disso costumam ser recusadas. */
 const MIN_PARCELA_BRL = 5;
 /** Máximo de parcelas permitido pelo preço atual (1–12). */
 const maxAllowedInstallments = computed(() => {
@@ -1126,6 +1126,18 @@ function canShowRedundancy(slug) {
 const BR_BILLING_GATEWAY_SLUGS = ['pagarme', 'efi'];
 function isBrBillingGateway(slug) {
     return BR_BILLING_GATEWAY_SLUGS.includes(String(slug || '').toLowerCase());
+}
+
+const CARD_INSTALLMENT_GATEWAY_SLUGS = ['efi', 'asaas', 'pagarme'];
+function supportsCardInstallments(slug) {
+    return CARD_INSTALLMENT_GATEWAY_SLUGS.includes(String(slug || '').toLowerCase());
+}
+function cardInstallmentsGatewayLabel(slug) {
+    const s = String(slug || '').toLowerCase();
+    if (s === 'efi') return 'Efí';
+    if (s === 'asaas') return 'Asaas';
+    if (s === 'pagarme') return 'Pagar.me';
+    return 'cartão';
 }
 
 function onPagarmeCompanyCepInput(e) {
@@ -2046,12 +2058,12 @@ function submit() {
                                     <p v-if="gateways_by_method.card.length === 0" class="text-xs text-zinc-500 dark:text-zinc-400">
                                         <Link href="/integracoes?tab=gateways" class="text-[var(--color-primary)] hover:underline">Conectar gateway</Link>
                                     </p>
-                                    <template v-if="form.payment_gateways.card === 'efi' || form.payment_gateways.card === 'asaas'">
+                                    <template v-if="supportsCardInstallments(form.payment_gateways.card)">
                                         <div class="mt-3 space-y-3 border-t border-zinc-200/80 pt-3 dark:border-zinc-600/80">
                                             <div class="flex items-center justify-between rounded-xl border border-zinc-100 bg-white px-4 py-3 dark:border-zinc-700 dark:bg-zinc-800/50">
                                                 <div class="min-w-0">
                                                     <p class="text-sm font-medium text-zinc-700 dark:text-zinc-300">Permitir parcelamento</p>
-                                                    <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">Cliente poderá parcelar no cartão de crédito ({{ form.payment_gateways.card === 'efi' ? 'Efí' : 'Asaas' }})</p>
+                                                    <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">Cliente poderá parcelar no cartão de crédito ({{ cardInstallmentsGatewayLabel(form.payment_gateways.card) }})</p>
                                                 </div>
                                                 <Toggle v-model="form.card_installments.enabled" class="shrink-0" />
                                             </div>

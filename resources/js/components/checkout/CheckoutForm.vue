@@ -3345,7 +3345,7 @@ function submit() {
                         </div>
                     </div>
                 </div>
-                <!-- Parcelas (Efí e Asaas; Stripe e MP Brick têm seu próprio) -->
+                <!-- Parcelas (Efí, Asaas e Pagar.me; Stripe, MP Brick e Asaas Card têm seu próprio) -->
                 <div
                     v-if="form.payment_method === 'card' && cardInstallmentsEnabled && !isCardGatewayStripe && !isCardGatewayMercadopago && !isCardGatewayAsaas"
                     class="mt-4"
