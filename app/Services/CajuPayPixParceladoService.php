@@ -367,11 +367,51 @@ class CajuPayPixParceladoService
         if (isset($merged['down_payment_cents']) && $merged['down_payment_cents'] !== null && $merged['down_payment_cents'] !== '') {
             $opts['parcelado_down_payment_cents'] = (int) $merged['down_payment_cents'];
         }
+        if (isset($merged['min_down_payment_bps']) && $merged['min_down_payment_bps'] !== null && $merged['min_down_payment_bps'] !== '') {
+            $opts['parcelado_min_down_payment_bps'] = (int) $merged['min_down_payment_bps'];
+        }
         if (! empty($merged['max_down_payment_bps'])) {
             $opts['parcelado_max_down_payment_bps'] = (int) $merged['max_down_payment_bps'];
         }
 
         return $opts;
+    }
+
+    /**
+     * Resolve valor da entrada (1ª parcela) em centavos para exibição do PIX.
+     *
+     * @param  array<string, mixed>  $planResult
+     */
+    public function resolveDownPaymentCentsFromPlanResult(array $planResult, ?int $fallbackCents = null): ?int
+    {
+        foreach (['down_payment_cents', 'downPaymentCents'] as $key) {
+            if (isset($planResult[$key]) && is_numeric($planResult[$key]) && (int) $planResult[$key] > 0) {
+                return (int) $planResult[$key];
+            }
+        }
+
+        $installments = $planResult['installments'] ?? null;
+        if (is_array($installments)) {
+            foreach ($installments as $installment) {
+                if (! is_array($installment)) {
+                    continue;
+                }
+                $sequence = (int) ($installment['sequence'] ?? 0);
+                if ($sequence !== 1 && $sequence !== 0) {
+                    continue;
+                }
+                $amount = (int) ($installment['amount_cents'] ?? 0);
+                if ($amount > 0) {
+                    return $amount;
+                }
+            }
+            $first = $installments[0] ?? null;
+            if (is_array($first) && (int) ($first['amount_cents'] ?? 0) > 0) {
+                return (int) $first['amount_cents'];
+            }
+        }
+
+        return $fallbackCents !== null && $fallbackCents > 0 ? $fallbackCents : null;
     }
 
     private function driver(): CajuPayDriver

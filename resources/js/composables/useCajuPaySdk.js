@@ -189,6 +189,34 @@ export function formatCajuPayPhone(phone) {
 }
 
 /**
+ * Monta objeto consumer/payer para o SDK — omite campos vazios para não renderizar inputs extras.
+ *
+ * @param {{ name?: string, email?: string, document?: string, phone?: string }} source
+ * @returns {{ name?: string, email?: string, document?: string, phone?: string }}
+ */
+export function buildCajuPayConsumer(source) {
+    const cleaned = {};
+    if (!source || typeof source !== 'object') {
+        return cleaned;
+    }
+    if (typeof source.name === 'string' && source.name.trim() !== '') {
+        cleaned.name = source.name.trim();
+    }
+    if (typeof source.email === 'string' && source.email.trim() !== '') {
+        cleaned.email = source.email.trim();
+    }
+    if (typeof source.document === 'string' && source.document.trim() !== '') {
+        cleaned.document = source.document.replace(/\D/g, '');
+    }
+    const phone = formatCajuPayPhone(source.phone);
+    if (phone) {
+        cleaned.phone = phone;
+    }
+
+    return cleaned;
+}
+
+/**
  * Atualiza o pagador (name/email/document/phone) no controller atual do SDK SEM remontar.
  * Indicação oficial CajuPay para fluxo embeddedOnly: chame setPayer() antes do
  * controller.confirm() — assim o SDK envia payer_name / payer_email / payer_document
@@ -205,18 +233,7 @@ export function setCajuPayPayer(controller, payer) {
         // sem cache-busting.
         return false;
     }
-    const cleaned = {};
-    if (payer && typeof payer === 'object') {
-        if (typeof payer.name === 'string' && payer.name.trim() !== '') cleaned.name = payer.name.trim();
-        if (typeof payer.email === 'string' && payer.email.trim() !== '') cleaned.email = payer.email.trim();
-        if (typeof payer.document === 'string' && payer.document.trim() !== '') {
-            cleaned.document = payer.document.replace(/\D/g, '');
-        }
-        const phone = formatCajuPayPhone(payer.phone);
-        if (phone) {
-            cleaned.phone = phone;
-        }
-    }
+    const cleaned = buildCajuPayConsumer(payer);
     try {
         controller.setPayer(cleaned);
         return true;
@@ -294,8 +311,43 @@ export async function mountCajuPayPixParcelado(containerSelector, opts) {
     throw new Error('CajuPay SDK não expõe mountPixParcelado().');
 }
 
+/**
+ * Converte opções do backend (parcelado_*) para o formato do SDK embed.
+ *
+ * @param {Record<string, unknown>} sdkOpts
+ * @returns {Record<string, unknown>}
+ */
+export function normalizeParceladoMountOptions(sdkOpts) {
+    if (!sdkOpts || typeof sdkOpts !== 'object') {
+        return {};
+    }
+
+    const out = { ...sdkOpts };
+    const down = out.downPaymentCents ?? out.down_payment_cents ?? out.parcelado_down_payment_cents;
+    if (down != null && down !== '' && Number(down) > 0) {
+        out.downPaymentCents = Number(down);
+    }
+    const minBps = out.minDownPaymentBps ?? out.min_down_payment_bps ?? out.parcelado_min_down_payment_bps;
+    if (minBps != null && minBps !== '' && Number(minBps) > 0) {
+        out.minDownPaymentBps = Number(minBps);
+    }
+    const maxBps = out.maxDownPaymentBps ?? out.max_down_payment_bps ?? out.parcelado_max_down_payment_bps;
+    if (maxBps != null && maxBps !== '' && Number(maxBps) > 0) {
+        out.maxDownPaymentBps = Number(maxBps);
+    }
+
+    delete out.parcelado_down_payment_cents;
+    delete out.parcelado_min_down_payment_bps;
+    delete out.parcelado_max_down_payment_bps;
+    delete out.parcelado_max_installments;
+
+    return out;
+}
+
 function buildParceladoMountOptions(opts) {
-    const sdkOpts = opts.sdkOptions && typeof opts.sdkOptions === 'object' ? opts.sdkOptions : {};
+    const sdkOpts = normalizeParceladoMountOptions(
+        opts.sdkOptions && typeof opts.sdkOptions === 'object' ? opts.sdkOptions : {},
+    );
     const mountOpts = {
         payAccountId: opts.payAccountId,
         amountCents: opts.amountCents,
@@ -304,7 +356,7 @@ function buildParceladoMountOptions(opts) {
         embedded: true,
         showBranding: true,
         showSubmitButton: false,
-        consumer: opts.consumer || undefined,
+        consumer: buildCajuPayConsumer(opts.consumer || undefined),
         onStatus: typeof opts.onStatus === 'function' ? opts.onStatus : undefined,
         onPlanCreated: typeof opts.onPlanCreated === 'function' ? opts.onPlanCreated : undefined,
         onError: typeof opts.onError === 'function' ? opts.onError : undefined,
@@ -327,16 +379,7 @@ export function setCajuPayConsumer(controller, consumer) {
     if (typeof fn !== 'function') {
         return setCajuPayPayer(controller, consumer);
     }
-    const cleaned = {};
-    if (consumer && typeof consumer === 'object') {
-        if (typeof consumer.name === 'string' && consumer.name.trim() !== '') cleaned.name = consumer.name.trim();
-        if (typeof consumer.email === 'string' && consumer.email.trim() !== '') cleaned.email = consumer.email.trim();
-        if (typeof consumer.document === 'string' && consumer.document.trim() !== '') {
-            cleaned.document = consumer.document.replace(/\D/g, '');
-        }
-        const phone = formatCajuPayPhone(consumer.phone);
-        if (phone) cleaned.phone = phone;
-    }
+    const cleaned = buildCajuPayConsumer(consumer);
     try {
         fn.call(controller, cleaned);
         return true;

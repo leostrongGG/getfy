@@ -89,6 +89,38 @@ class CajuPayPixParceladoTest extends TestCase
         $this->assertArrayHasKey('max_installments', $errors);
     }
 
+    public function test_sdk_options_from_rules_includes_down_payment_for_payment_link(): void
+    {
+        $service = app(CajuPayPixParceladoService::class);
+        $opts = $service->sdkOptionsFromRules([
+            'max_installments' => 6,
+            'down_payment_cents' => 5000,
+            'min_down_payment_bps' => 2000,
+            'max_down_payment_bps' => 3000,
+        ]);
+
+        $this->assertSame(5000, $opts['parcelado_down_payment_cents']);
+        $this->assertSame(2000, $opts['parcelado_min_down_payment_bps']);
+        $this->assertSame(3000, $opts['parcelado_max_down_payment_bps']);
+    }
+
+    public function test_resolve_down_payment_cents_from_plan_result(): void
+    {
+        $service = app(CajuPayPixParceladoService::class);
+
+        $this->assertSame(
+            5000,
+            $service->resolveDownPaymentCentsFromPlanResult([
+                'installments' => [
+                    ['sequence' => 1, 'amount_cents' => 5000],
+                    ['sequence' => 2, 'amount_cents' => 2500],
+                ],
+            ])
+        );
+
+        $this->assertSame(7500, $service->resolveDownPaymentCentsFromPlanResult([], 7500));
+    }
+
     public function test_create_plan_includes_consumer_phone_e164(): void
     {
         Http::fake([

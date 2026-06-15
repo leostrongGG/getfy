@@ -3285,6 +3285,7 @@ class CheckoutController extends Controller
             'pix_copy_paste' => ['required', 'string', 'max:65535'],
             'pix_qr_code' => ['nullable', 'string', 'max:65535'],
             'installment_count' => ['nullable', 'integer', 'min:1', 'max:24'],
+            'down_payment_cents' => ['nullable', 'integer', 'min:1'],
         ]);
 
         $cached = Cache::get('parcelado_order.'.$validated['polling_token']);
@@ -3297,11 +3298,24 @@ class CheckoutController extends Controller
             return response()->json(['message' => 'Pedido inválido ou já processado.'], 422);
         }
 
+        $parceladoService = app(CajuPayPixParceladoService::class);
+        $productRules = $parceladoService->productRulesFromConfig($order->product?->checkout_config ?? []);
+        $configuredDownCents = isset($productRules['down_payment_cents']) && $productRules['down_payment_cents'] !== null && $productRules['down_payment_cents'] !== ''
+            ? (int) $productRules['down_payment_cents']
+            : null;
+        $downPaymentCents = $parceladoService->resolveDownPaymentCentsFromPlanResult(
+            ['down_payment_cents' => $validated['down_payment_cents'] ?? null],
+            $configuredDownCents,
+        );
+
         $meta = is_array($order->metadata) ? $order->metadata : [];
         $meta['cajupay_parcelado_plan_id'] = $validated['plan_id'];
         $meta['cajupay_parcelado_first_payment_id'] = $validated['payment_id'] ?? null;
         if (! empty($validated['installment_count'])) {
             $meta['cajupay_parcelado_installment_count'] = (int) $validated['installment_count'];
+        }
+        if ($downPaymentCents !== null && $downPaymentCents > 0) {
+            $meta['cajupay_parcelado_down_payment_cents'] = $downPaymentCents;
         }
 
         $order->update([
@@ -3319,8 +3333,14 @@ class CheckoutController extends Controller
             'copy_paste' => $validated['pix_copy_paste'],
         ];
 
+        $displayAmount = $downPaymentCents !== null && $downPaymentCents > 0
+            ? MoneyMinorUnits::fromMinorUnits($downPaymentCents, 'BRL')
+            : (float) $order->amount;
+
         $displayToken = PixCheckoutDisplay::persistAndStoreSession($order->fresh(), $pixResult, [
-            'amount' => (float) $order->amount,
+            'amount' => $displayAmount,
+            'order_total_amount' => (float) $order->amount,
+            'down_payment_cents' => $downPaymentCents,
             'product_name' => $product?->name,
             'checkout_slug' => $order->getCheckoutSlug(),
             'redirect_after_purchase' => $redirectUrl,
@@ -3391,6 +3411,7 @@ class CheckoutController extends Controller
             'copy_paste' => $stored['copy_paste'] ?? null,
             'amount' => $amount,
             'amount_formatted' => $amountFormatted,
+            'order_total_amount' => (float) ($stored['order_total_amount'] ?? $order->amount),
             'product_name' => $stored['product_name'] ?? $order->product->name,
             'checkout_slug' => $stored['checkout_slug'] ?? $order->getCheckoutSlug(),
             'redirect_after_purchase' => $stored['redirect_after_purchase'] ?? null,

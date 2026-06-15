@@ -36,6 +36,7 @@ const props = defineProps({
     created_at: { type: Number, required: true },
     expiry_seconds: { type: Number, default: 900 },
     amount: { type: Number, default: 0 },
+    order_total_amount: { type: Number, default: 0 },
     conversion_pixels: { type: Object, default: () => ({}) },
     meta_purchase_event_id: { type: String, default: '' },
     purchase_contents: { type: Array, default: () => [] },
@@ -270,6 +271,12 @@ onUnmounted(() => {
                 </div>
                 <div class="px-5 sm:px-6 pb-6">
                     <h1 class="mb-1 text-center text-lg font-bold text-gray-900 sm:text-xl">Entrada PIX Parcelado — {{ amount_formatted }}</h1>
+                    <p
+                        v-if="order_total_amount > amount"
+                        class="mb-1 text-center text-xs text-gray-500 sm:text-sm"
+                    >
+                        Valor total da compra: R$ {{ order_total_amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+                    </p>
                     <p class="mb-5 text-center text-xs text-gray-500 sm:text-sm">Pague a entrada para liberar o produto. Copie o código ou escaneie o QR Code no app do seu banco.</p>
 
                     <p class="mb-2 text-xs text-gray-500">Pix Copia e Cola</p>

@@ -4,6 +4,7 @@ import {
     mountCajuPayPixParcelado,
     confirmCajuPayParceladoController,
     setCajuPayConsumer,
+    buildCajuPayConsumer,
 } from '@/composables/useCajuPaySdk';
 
 const props = defineProps({
@@ -25,6 +26,17 @@ const widgetReady = ref(false);
 const mountKey = ref('');
 
 const containerSelector = computed(() => `#${props.containerId}`);
+
+function resolvedConsumer() {
+    return buildCajuPayConsumer(props.initialConsumer);
+}
+
+function syncConsumerWithWidget() {
+    if (!controller.value) {
+        return;
+    }
+    setCajuPayConsumer(controller.value, resolvedConsumer());
+}
 
 function destroyController() {
     try {
@@ -65,7 +77,7 @@ async function tryMount() {
             amountCents: props.amountCents,
             description: props.description,
             sdkOptions: props.sdkOptions,
-            consumer: props.initialConsumer,
+            consumer: resolvedConsumer(),
             onStatus: (event) => {
                 const phase = event?.phase || event?.status || '';
                 if (phase === 'ready' || phase === 'loading') {
@@ -83,6 +95,7 @@ async function tryMount() {
         });
         mountKey.value = key;
         widgetReady.value = true;
+        syncConsumerWithWidget();
         emit('ready');
     } catch (e) {
         error.value = e?.message || 'Não foi possível carregar PIX Parcelado.';
@@ -99,10 +112,16 @@ watch(
     { deep: true },
 );
 
+watch(
+    () => props.initialConsumer,
+    () => syncConsumerWithWidget(),
+    { deep: true },
+);
+
 onBeforeUnmount(() => destroyController());
 
 function setConsumer(payer) {
-    return setCajuPayConsumer(controller.value, payer);
+    return setCajuPayConsumer(controller.value, buildCajuPayConsumer(payer));
 }
 
 async function confirm() {

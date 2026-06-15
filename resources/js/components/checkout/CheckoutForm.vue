@@ -12,6 +12,7 @@ import CheckoutPaymentMethods from './CheckoutPaymentMethods.vue';
 import AsaasCard from './gateways/asaas/Card.vue';
 import CajuPaySdkMount from './CajuPaySdkMount.vue';
 import CajuPayParceladoMount from './CajuPayParceladoMount.vue';
+import { buildCajuPayConsumer } from '@/composables/useCajuPaySdk';
 import {
     CHECKOUT_PAGARME_TOKENIZE_FORM_ID,
     PAGARME_TOKENIZE_FORM_ACTION,
@@ -661,6 +662,15 @@ watch(
 const phoneDigits = ref('');
 const phoneCountryOpen = ref(false);
 
+const cajuPayParceladoConsumer = computed(() => buildCajuPayConsumer({
+    name: form.name,
+    email: form.email,
+    document: (form.cpf || '').replace(/\D/g, ''),
+    phone: (phoneDigits.value || '').length >= 8
+        ? `${form.country_code}${phoneDigits.value}`
+        : undefined,
+}));
+
 const showEmailDropdown = ref(false);
 const emailDropdownCloseTimer = ref(null);
 const filteredEmailSuggestions = computed(() => {
@@ -1275,11 +1285,42 @@ const cajupayOrderMaterialized = ref(false);
 const parceladoPayAccountId = ref('');
 const parceladoPaymentLinkToken = ref('');
 const parceladoAmountCents = ref(0);
+const parceladoSdkOptionsLive = ref({});
 const parceladoSessionLoading = ref(false);
 const parceladoError = ref('');
 const parceladoMountRef = ref(null);
 const parceladoPollingToken = ref('');
 let parceladoSessionDebounce = null;
+
+watch(
+    () => props.parceladoSdkOptions,
+    (options) => {
+        if (!parceladoPaymentLinkToken.value && options && typeof options === 'object') {
+            parceladoSdkOptionsLive.value = options;
+        }
+    },
+    { immediate: true, deep: true },
+);
+
+function resolveParceladoDownPaymentCents(result) {
+    if (!result || typeof result !== 'object') return null;
+    const direct = result.down_payment_cents ?? result.downPaymentCents;
+    if (direct != null && Number(direct) > 0) {
+        return Number(direct);
+    }
+    const installments = Array.isArray(result.installments) ? result.installments : [];
+    const first = installments.find((item) => Number(item?.sequence) === 1) ?? installments[0];
+    const fromInstallment = first?.amount_cents;
+    if (fromInstallment != null && Number(fromInstallment) > 0) {
+        return Number(fromInstallment);
+    }
+    const configured = parceladoSdkOptionsLive.value?.parcelado_down_payment_cents
+        ?? parceladoSdkOptionsLive.value?.downPaymentCents;
+    if (configured != null && Number(configured) > 0) {
+        return Number(configured);
+    }
+    return null;
+}
 
 function buildParceladoSessionPayload() {
     const payload = {
@@ -1317,6 +1358,9 @@ async function ensureParceladoSession(silent = false) {
         parceladoPayAccountId.value = data.pay_account_id || props.cajupayPayAccountId || '';
         parceladoPaymentLinkToken.value = data.payment_link_token || '';
         parceladoAmountCents.value = Number(data.amount_cents) || Math.round(Number(props.checkoutTotalBrl) * 100);
+        if (data.sdk_options && typeof data.sdk_options === 'object') {
+            parceladoSdkOptionsLive.value = data.sdk_options;
+        }
         return parceladoPaymentLinkToken.value;
     } catch (e) {
         parceladoError.value = e?.response?.data?.message || e?.message || 'Não foi possível carregar PIX Parcelado.';
@@ -1382,14 +1426,7 @@ async function submitCajuPayParceladoFlow() {
             }
             throw e;
         }
-        parceladoMountRef.value?.setConsumer?.({
-            name: form.name,
-            email: form.email,
-            document: (form.cpf || '').replace(/\D/g, ''),
-            phone: showPhone.value && (phoneDigits.value || '').length >= 8
-                ? `${form.country_code}${phoneDigits.value}`
-                : undefined,
-        });
+        parceladoMountRef.value?.setConsumer?.(cajuPayParceladoConsumer.value);
         const result = await parceladoMountRef.value.confirm();
         const copyPaste = result?.pix_copy_paste || result?.copy_paste || '';
         if (!copyPaste) {
@@ -1402,6 +1439,7 @@ async function submitCajuPayParceladoFlow() {
             pix_copy_paste: copyPaste,
             pix_qr_code: result?.pix_qr_code || result?.qrcode || null,
             installment_count: result?.installment_count || parceladoMountRef.value?.controller?.getSelectedInstallmentCount?.() || null,
+            down_payment_cents: resolveParceladoDownPaymentCents(result),
         }, {
             headers: { 'X-XSRF-TOKEN': getCsrfToken(), Accept: 'application/json' },
         });
@@ -3248,8 +3286,8 @@ function submit() {
                         :payment-link-token="parceladoPaymentLinkToken"
                         :amount-cents="parceladoAmountCents || Math.round((checkoutTotalBrl || 0) * 100)"
                         :description="productName || 'Compra'"
-                        :sdk-options="parceladoSdkOptions"
-                        :initial-consumer="{ name: form.name, email: form.email, document: (form.cpf || '').replace(/\D/g, '') }"
+                        :sdk-options="parceladoSdkOptionsLive"
+                        :initial-consumer="cajuPayParceladoConsumer"
                     />
                     <div
                         v-if="!parceladoPaymentLinkToken && (parceladoSessionLoading)"
