@@ -14,7 +14,10 @@ class PushVapidSettingsController extends Controller
             'force' => ['sometimes', 'boolean'],
         ]);
 
-        $result = $manager->generate((bool) ($validated['force'] ?? false));
+        $force = (bool) ($validated['force'] ?? false);
+        $result = $force
+            ? $manager->generate(true)
+            : $manager->ensureConfigured(false);
 
         if (! ($result['success'] ?? false)) {
             $status = match ($result['error'] ?? '') {

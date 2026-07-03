@@ -142,6 +142,27 @@ class VapidKeysManagerTest extends TestCase
         $this->assertSame(VapidEnvKeys::normalize($keys['publicKey']), $status['public_key']);
     }
 
+    public function test_read_env_value_uses_last_non_empty_when_duplicated(): void
+    {
+        try {
+            $keys = VapidKeyGenerator::createPair();
+        } catch (\Throwable $e) {
+            $this->markTestSkipped('Geração VAPID indisponível neste ambiente: '.$e->getMessage());
+        }
+
+        file_put_contents(
+            $this->envPath,
+            "APP_NAME=Test\nPWA_VAPID_PUBLIC=\nPWA_VAPID_PRIVATE=\nPWA_VAPID_PUBLIC=\"{$keys['publicKey']}\"\nPWA_VAPID_PRIVATE=\"{$keys['privateKey']}\"\n"
+        );
+
+        $manager = new VapidKeysManager($this->envPath, $this->sharedPath);
+
+        $this->assertTrue($manager->status()['configured']);
+        $pair = $manager->resolveKeyPair();
+        $this->assertSame(VapidEnvKeys::normalize($keys['publicKey']), $pair['public']);
+        $this->assertSame(VapidEnvKeys::normalize($keys['privateKey']), $pair['private']);
+    }
+
     public function test_generate_fails_when_env_not_writable(): void
     {
         if (DIRECTORY_SEPARATOR === '\\') {

@@ -3,7 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Support\BrandFavicon;
-use App\Support\VapidEnvKeys;
+use App\Support\VapidKeysManager;
 use App\Models\MemberNotification;
 use App\Models\MemberPushSubscription;
 use App\Models\PanelNotification;
@@ -85,14 +85,9 @@ class HandleInertiaRequests extends Middleware
         if ($isPanelContext) {
             $settingsPluginTabs = PluginRegistry::getSettingsTabs();
             $pluginNavItems = PluginHookBus::applyFilters('panel.menu', PluginRegistry::getMenuItems(), $request);
-            $vapidPublic = config('getfy.pwa.vapid_public');
-            $pushEnabled = VapidEnvKeys::normalizedPairLooksValid(
-                env('PWA_VAPID_PUBLIC'),
-                env('PWA_VAPID_PRIVATE')
-            );
-            if (! $pushEnabled) {
-                $vapidPublic = null;
-            }
+            $vapidPair = app(VapidKeysManager::class)->resolveKeyPair();
+            $vapidPublic = $vapidPair['public'];
+            $pushEnabled = $vapidPublic !== null && $vapidPair['private'] !== null;
             $installed = PluginRegistry::installed();
             $plugins = array_map(fn ($p) => [
                 'slug' => $p['slug'],

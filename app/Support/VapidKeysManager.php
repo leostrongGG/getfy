@@ -25,28 +25,42 @@ class VapidKeysManager
     {
         $envPath = $this->resolveEnvPath();
         $envExists = is_file($envPath);
-        $content = $envExists ? (string) file_get_contents($envPath) : '';
-        $public = $this->readEnvValue($content, 'PWA_VAPID_PUBLIC');
-        $private = $this->readEnvValue($content, 'PWA_VAPID_PRIVATE');
-        $configured = VapidEnvKeys::normalizedPairLooksValid($public, $private);
-
-        if (! $configured && is_file($this->resolveSharedVapidPath())) {
-            $shared = (string) file_get_contents($this->resolveSharedVapidPath());
-            $sharedPublic = $this->readEnvValue($shared, 'PWA_VAPID_PUBLIC');
-            $sharedPrivate = $this->readEnvValue($shared, 'PWA_VAPID_PRIVATE');
-            if (VapidEnvKeys::normalizedPairLooksValid($sharedPublic, $sharedPrivate)) {
-                $configured = true;
-                $public = $sharedPublic;
-            }
-        }
+        $pair = $this->resolveKeyPair();
+        $configured = $pair['public'] !== null && $pair['private'] !== null;
 
         return [
             'configured' => $configured,
-            'public_key' => $configured ? VapidEnvKeys::normalize($public) : null,
+            'public_key' => $pair['public'],
             'env_writable' => $envExists && is_writable($envPath),
             'env_exists' => $envExists,
             'shared_file_exists' => is_file($this->resolveSharedVapidPath()),
         ];
+    }
+
+    /**
+     * Lê par VAPID válido do .env (última linha não vazia) ou do volume .docker/pwa_vapid.env.
+     * Ignora config cache — necessário quando `php artisan config:cache` foi rodado sem as chaves.
+     *
+     * @return array{public: string|null, private: string|null}
+     */
+    public function resolveKeyPair(): array
+    {
+        foreach ([$this->resolveEnvPath(), $this->resolveSharedVapidPath()] as $path) {
+            if (! is_file($path)) {
+                continue;
+            }
+            $content = (string) file_get_contents($path);
+            $public = $this->readEnvValue($content, 'PWA_VAPID_PUBLIC');
+            $private = $this->readEnvValue($content, 'PWA_VAPID_PRIVATE');
+            if (VapidEnvKeys::normalizedPairLooksValid($public, $private)) {
+                return [
+                    'public' => VapidEnvKeys::normalize($public),
+                    'private' => VapidEnvKeys::normalize($private),
+                ];
+            }
+        }
+
+        return ['public' => null, 'private' => null];
     }
 
     /**
@@ -281,13 +295,19 @@ class VapidKeysManager
 
     private function readEnvValue(string $content, string $key): ?string
     {
-        if (! preg_match('/^\s*'.preg_quote($key, '/').'\s*=\s*(.+)\s*$/mi', $content, $m)) {
+        if (! preg_match_all('/^\s*'.preg_quote($key, '/').'\s*=\s*(.*)\s*$/mi', $content, $matches)) {
             return null;
         }
 
-        $value = trim((string) ($m[1] ?? ''), " \t\n\r\0\x0B\"'`");
+        $last = null;
+        foreach ($matches[1] as $raw) {
+            $value = trim((string) $raw, " \t\n\r\0\x0B\"'`");
+            if ($value !== '') {
+                $last = $value;
+            }
+        }
 
-        return $value !== '' ? $value : null;
+        return $last;
     }
 
     private function resolveEnvPath(): string
