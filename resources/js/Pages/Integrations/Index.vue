@@ -12,6 +12,7 @@ import WebhookSidebar from '@/components/integrations/WebhookSidebar.vue';
 import ExternalCheckoutSidebar from '@/components/integrations/ExternalCheckoutSidebar.vue';
 import CademiSidebar from '@/components/integrations/CademiSidebar.vue';
 import IntegraXSidebar from '@/components/integrations/IntegraXSidebar.vue';
+import PixelXSidebar from '@/components/integrations/PixelXSidebar.vue';
 import ConversionPixelsSidebar from '@/components/integrations/ConversionPixelsSidebar.vue';
 import GatewayCard from '@/components/settings/GatewayCard.vue';
 import GatewayConfigSidebar from '@/components/settings/GatewayConfigSidebar.vue';
@@ -62,6 +63,12 @@ const APPS_BASE = [
         image: 'images/integrations/integrax.png',
     },
     {
+        id: 'pixel_x',
+        name: 'Pixel X',
+        description: 'Rastreamento de conversão. Envie os 10 eventos mapeados para a Pixel X com token e payload proprietário.',
+        image: 'images/integrations/pixel-x.jpg',
+    },
+    {
         id: 'conversion_pixels',
         name: 'Pixels e rastreamento',
         description: 'Meta Ads, TikTok, Google Ads, Google Analytics e scripts. Reutilize nos produtos sem cadastrar de novo.',
@@ -99,6 +106,7 @@ const props = defineProps({
             last_error: null,
         }),
     },
+    pixel_x_integrations: { type: Array, default: () => [] },
 });
 
 import { usePluginComponentResolver } from '@/composables/usePluginComponentResolver';
@@ -159,6 +167,15 @@ const APPS = computed(() =>
         if (app.id === 'integrax') {
             const conn = props.integrax_connection || {};
             const hasActive = conn.configured && conn.is_active;
+            return {
+                ...app,
+                status: hasActive ? 'active' : undefined,
+            };
+        }
+        if (app.id === 'pixel_x') {
+            const hasActive = (props.pixel_x_integrations || []).some(
+                (i) => i.configured && i.is_active
+            );
             return {
                 ...app,
                 status: hasActive ? 'active' : undefined,
@@ -266,6 +283,17 @@ function closeConversionPixelsSidebar() {
     conversionPixelsSidebarOpen.value = false;
 }
 
+const pixelXSidebarOpen = ref(false);
+function openPixelXSidebar() {
+    pixelXSidebarOpen.value = true;
+}
+function closePixelXSidebar() {
+    pixelXSidebarOpen.value = false;
+}
+function onPixelXSaved() {
+    router.reload({ only: ['pixel_x_integrations', 'products'] });
+}
+
 function openPluginSidebar(app) {
     selectedPluginSlot.value = app?.plugin_slot || (app?.plugin_component ? { component: app.plugin_component, ui_mode: 'legacy' } : null);
     selectedPluginAppName.value = app?.name || 'Integração';
@@ -318,6 +346,8 @@ function onAppClick(app) {
         openConversionPixelsSidebar();
     } else if (app.id === 'integrax') {
         openIntegraxSidebar();
+    } else if (app.id === 'pixel_x') {
+        openPixelXSidebar();
     } else if (app.plugin) {
         openPluginSidebar(app);
     }
@@ -496,6 +526,13 @@ watch(() => page.url, () => syncGatewayFromQuery());
             :integrax_connection="integrax_connection"
             @close="closeIntegraxSidebar"
             @saved="onIntegraxSaved"
+        />
+        <PixelXSidebar
+            :open="pixelXSidebarOpen"
+            :pixel_x_integrations="pixel_x_integrations"
+            :products="products"
+            @close="closePixelXSidebar"
+            @saved="onPixelXSaved"
         />
         <!-- Plugin sidebars (ex.: AutoZap) -->
         <Teleport to="body">
